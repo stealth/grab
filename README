@@ -1,7 +1,7 @@
 grab - a simple but very fast grep implementation
 -------------------------------------------------
 
-This is my own, experimental version, of 'grep' so I can test
+This is my own, experimental, version of 'grep' so I can test
 various strategies to speedy access large directory trees.
 On SSD's you can smart out common greps by up to 100%.
 
