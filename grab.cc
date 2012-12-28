@@ -328,7 +328,7 @@ void *find_iterative(void *vp)
 
 void usage(const string &p)
 {
-	cout<<"Usage: "<<p<<"[-rRI -n <cores>] <regex> <path>\n";
+	cout<<"Usage: "<<p<<" [-rRI -n <cores>] <regex> <path>\n";
 	exit(1);
 }
 
