@@ -1,9 +1,5 @@
-
-LIBS=-lpcre
-
-LIBS+=-lpthread
-DEFS=-DBUILD_WITH_PARALLELISM
+CFLAGS+=-pthread -DBUILD_WITH_PARALLELISM
+LDFLAGS+=-pthread -lpcre
 
 grab: grab.cc
-	$(CXX) -Wall -O2 grab.cc $(DEFS) $(LIBS) -o grab
 
