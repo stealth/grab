@@ -27,9 +27,9 @@ grab is using mmap(2) with MAP_POPULATE and matches the whole file blob
 without counting newlines (which grep is doing even if there is no match)
 which is a lot faster than reading the file in chunks and counting the
 newlines. If available, grab also uses the PCRE JIT feature.
-However, speedups are only measureable on fast HDD's or SSD's. In the later
+However, speedups are only measurable on fast HDD's or SSD's. In the later
 case, the speedup can be really drastically (even up to 100%) if matching
-recursively. So cearly, the storage is the bottleneck, and parallelizing
+recursively. So clearly, the storage is the bottleneck, and parallelizing
 the search is in most cases even slower, as the seeking takes more time
 than just doing stuff in linear; even on SSD's.
 
