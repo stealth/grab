@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Sebastian Krahmer.
+ * Copyright (C) 2012-2014 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -384,17 +384,16 @@ int main(int argc, char **argv)
 
 		chunk_size >>= 2;
 
-		files.resize(1<<20);
-		stats.resize(1<<20);
+		files.reserve(1<<20);
+		stats.reserve(1<<20);
 
 		nftw(path.c_str(), thread_walk, 1024, FTW_PHYS);
 
-		vector<pthread_t> tids;
-
 		FileGrep *tgrep = NULL;
 		cpu_set_t cpuset;
-		thread_arg ta;
-		pthread_t tid;
+		thread_arg ta[cores];
+		pthread_t tids[cores];
+		int r = 0;
 
 		for (int i = 0; i < cores; ++i) {
 			tgrep = new FileGrep;
@@ -403,21 +402,26 @@ int main(int argc, char **argv)
 			tgrep->recurse();
 			CPU_ZERO(&cpuset);
 			CPU_SET(i, &cpuset);
-			ta.grep = tgrep;
-			ta.idx = i;
-			ta.nthreads = cores;
 
+			ta[i].grep = tgrep;
+			ta[i].idx = i;
+			ta[i].nthreads = cores;
 
-			if (pthread_create(&tid, NULL, find_iterative, &ta) < 0)
-				cerr<<"pthread_create: "<<strerror(errno)<<endl;
-			if (pthread_setaffinity_np(tid, sizeof(cpuset), &cpuset) < 0)
-				cerr<<"pthread_setaffinity_np: "<<strerror(errno)<<endl;;
-
-			tids.push_back(tid);
+			if ((r = pthread_create(tids + i, NULL, find_iterative, ta + i)) != 0) {
+				cerr<<"pthread_create: "<<strerror(r)<<endl;
+				exit(-1);
+			}
+			if ((r = pthread_setaffinity_np(tids[i], sizeof(cpuset), &cpuset)) != 0) {
+				cerr<<"pthread_setaffinity_np:"<<strerror(r)
+				    <<" (more threads than cores?)"<<endl;
+				exit(-1);
+			}
 		}
 
-		for (vector<pthread_t>::iterator i = tids.begin(); i != tids.end(); ++i)
-			pthread_join(*i, NULL);
+		for (int i = 0; i < cores; ++i) {
+			pthread_join(tids[i], NULL);
+			delete ta[i].grep;
+		}
 
 		exit(0);
 
