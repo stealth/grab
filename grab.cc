@@ -120,7 +120,7 @@ vector<string> files;
 vector<struct stat> stats;
 
 
-int walk(const char *path, const struct stat *st, int typeflag)
+int walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwbuf)
 {
 	if (typeflag == FTW_F) {
 		if (S_ISREG(st->st_mode)) {
@@ -132,7 +132,7 @@ int walk(const char *path, const struct stat *st, int typeflag)
 }
 
 
-int thread_walk(const char *path, const struct stat *st, int typeflag)
+int thread_walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwbuf)
 {
 	if (typeflag == FTW_F) {
 		if (S_ISREG(st->st_mode)) {
@@ -305,7 +305,7 @@ int FileGrep::find(const string &path)
 int FileGrep::find_recursive(const string &path)
 {
 	recursive = 1;
-	return ftw(path.c_str(), walk, 1024);
+	return nftw(path.c_str(), walk, 1024, FTW_PHYS);
 }
 
 
@@ -361,27 +361,33 @@ int main(int argc, char **argv)
 			config["cores"] = atoi(optarg);
 #endif
 			break;
+		default:
+			usage(argv[0]);
 		}
 	}
 
 	string path = "", regex = "";
 
-	if (optind + 2 != argc)
+	if (argc < optind + 2)
 		usage(argv[0]);
 
 	regex = argv[optind++];
-	path = argv[optind];
+	path = argv[optind++];
 
 #ifdef BUILD_WITH_PARALLELISM
 	int cores = config["cores"];
 	if (cores > 1) {
+		if (config.count("recursive") == 0) {
+			cerr<<"Multicore support only for recursive grabs.\n";
+			return -1;
+		}
 
 		chunk_size >>= 2;
 
 		files.resize(1<<20);
 		stats.resize(1<<20);
 
-		ftw(path.c_str(), thread_walk, 1024);
+		nftw(path.c_str(), thread_walk, 1024, FTW_PHYS);
 
 		vector<pthread_t> tids;
 
@@ -433,9 +439,15 @@ int main(int argc, char **argv)
 			return -1;
 		}
 	} else {
-		if (grep->find(path) < 0) {
-			cerr<<grep->why()<<endl;
-			return -1;
+		for (;;) {
+			if (grep->find(path) < 0) {
+				cerr<<grep->why()<<endl;
+				return -1;
+			}
+			if (argc > optind)
+				path = argv[optind++];
+			else
+				break;
 		}
 	}
 
