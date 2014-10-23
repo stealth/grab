@@ -1,9 +1,9 @@
-grab - a simple but very fast grep implementation
-=================================================
+grab - simple but very fast grep
+================================
 
-This is my own, experimental, version of _grep_ so I can test
-various strategies to speedy access large directory trees.
-On SSD's you can smart out common greps by up to 100%.
+This is my own, experimental, parallel version of _grep_ so I can test
+various strategies to speed up access to large directory trees.
+On SSD's you can easily outsmart common greps by up to 100%.
 
 Options:
 
@@ -22,7 +22,7 @@ Options:
 ```
 
 
-grab uses the _pcre_ library, so basically its equivalent to a `grep -P -a`
+_grab_ uses the _pcre_ library, so basically its equivalent to a `grep -P -a`
 
 
 Why is it faster?
@@ -38,7 +38,7 @@ recursively. So clearly, the storage is the bottleneck, and parallelizing
 the search is in most cases even slower, as the seeking takes more time
 than just doing stuff in linear; even on SSD's.
 
-Additionally, grab is skipping files which are too small to contain the
+Additionally, _grab_ is skipping files which are too small to contain the
 regular expression. For larger regex's in a recursive search, this can
 skip quite good amount of files without even opening them.
 
