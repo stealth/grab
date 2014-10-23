@@ -72,7 +72,7 @@ class FileGrep {
 	int minlen;
 	char *mmap_buf;
 	size_t clen;
-	bool print_line, print_offset, recursive, colored;
+	bool print_line, print_offset, recursive, colored, print_path;
 
 
 	pcre *pcreh;
@@ -91,6 +91,11 @@ public:
 	void recurse()
 	{
 		recursive = 1;
+	}
+
+	void show_path(bool b)
+	{
+		print_path = b;
 	}
 
 	int prepare(const std::string &);
@@ -147,7 +152,7 @@ int thread_walk(const char *path, const struct stat *st, int typeflag, struct FT
 
 FileGrep::FileGrep()
 	: err(""), minlen(1), mmap_buf(fail_addr), clen(0),
-	  print_line(1), print_offset(0), recursive(0), colored(0), pcreh(NULL), extra(NULL)
+	  print_line(1), print_offset(0), recursive(0), colored(0), print_path(0), pcreh(NULL), extra(NULL)
 {
 }
 
@@ -235,7 +240,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 			if (rc <= 0)
 				break;
 
-			if (recursive)
+			if (recursive || print_path)
 				str<<path<<": ";
 
 			if (print_offset)
@@ -259,7 +264,8 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 				if (colored)
 					str<<stop_inv;
 				str<<string(after, a)<<endl;
-			}
+			} else if (!print_offset)
+				str<<"matches\n";
 
 			start += ovector[1] + a;
 		}
@@ -328,7 +334,7 @@ void *find_iterative(void *vp)
 
 void usage(const string &p)
 {
-	cout<<"Usage: "<<p<<" [-rRI -n <cores>] <regex> <path>\n";
+	cout<<"Usage: "<<p<<" [-rR] [-I] [-O] [-l] [-n <cores>] <regex> <path>\n";
 	exit(1);
 }
 
@@ -443,6 +449,8 @@ int main(int argc, char **argv)
 			return -1;
 		}
 	} else {
+		if (argc - optind > 0)
+			grep->show_path(1);
 		for (;;) {
 			if (grep->find(path) < 0) {
 				cerr<<grep->why()<<endl;
