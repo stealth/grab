@@ -264,8 +264,10 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 				if (colored)
 					str<<stop_inv;
 				str<<string(after, a)<<endl;
-			} else if (!print_offset)
+			} else if (!print_offset) {
 				str<<"matches\n";
+				break;
+			}
 
 			start += ovector[1] + a;
 		}
