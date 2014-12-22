@@ -70,8 +70,6 @@ class FileGrep {
 	std::string err;
 	static std::string start_inv, stop_inv;
 	int minlen;
-	char *mmap_buf;
-	size_t clen;
 	bool print_line, print_offset, recursive, colored, print_path;
 
 
@@ -151,7 +149,7 @@ int thread_walk(const char *path, const struct stat *st, int typeflag, struct FT
 
 
 FileGrep::FileGrep()
-	: err(""), minlen(1), mmap_buf(fail_addr), clen(0),
+	: err(""), minlen(1),
 	  print_line(1), print_offset(0), recursive(0), colored(0), print_path(0), pcreh(NULL), extra(NULL)
 {
 }
@@ -222,8 +220,13 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		else
 			clen = chunk_size;
 
+#ifdef __linux__
+        static const int mmap_flags = MAP_PRIVATE|MAP_NORESERVE|MAP_POPULATE;
+#else
+        static const int mmap_flags = MAP_PRIVATE|MAP_NORESERVE;
+#endif
 		if ((content = (char *)mmap(NULL, clen,
-		                            PROT_READ, MAP_PRIVATE||MAP_NORESERVE|MAP_POPULATE,
+		                            PROT_READ, mmap_flags,
 		                            fd, off)) == fail_addr) {
 			err = "FileGrep::find::mmap: " + string(strerror(errno));
 			close(fd);
@@ -340,6 +343,20 @@ void usage(const string &p)
 	exit(1);
 }
 
+static void set_thread_affinity(pthread_t *thread, int coreno)
+{
+#ifdef __linux__
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(coreno, &cpuset);
+    int r = pthread_setaffinity_np(*thread, sizeof(cpuset), &cpuset);
+    if (r != 0) {
+        cerr<<"pthread_setaffinity_np:"<<strerror(r)
+            <<" (more threads than cores?)"<<endl;
+        exit(-1);
+    }
+#endif
+}
 
 int main(int argc, char **argv)
 {
@@ -398,7 +415,6 @@ int main(int argc, char **argv)
 		nftw(path.c_str(), thread_walk, 1024, FTW_PHYS);
 
 		FileGrep *tgrep = NULL;
-		cpu_set_t cpuset;
 		thread_arg ta[cores];
 		pthread_t tids[cores];
 		int r = 0;
@@ -408,8 +424,6 @@ int main(int argc, char **argv)
 			tgrep->config(config);
 			tgrep->prepare(regex);
 			tgrep->recurse();
-			CPU_ZERO(&cpuset);
-			CPU_SET(i, &cpuset);
 
 			ta[i].grep = tgrep;
 			ta[i].idx = i;
@@ -419,11 +433,7 @@ int main(int argc, char **argv)
 				cerr<<"pthread_create: "<<strerror(r)<<endl;
 				exit(-1);
 			}
-			if ((r = pthread_setaffinity_np(tids[i], sizeof(cpuset), &cpuset)) != 0) {
-				cerr<<"pthread_setaffinity_np:"<<strerror(r)
-				    <<" (more threads than cores?)"<<endl;
-				exit(-1);
-			}
+            set_thread_affinity(&tids[i], i);
 		}
 
 		for (int i = 0; i < cores; ++i) {
