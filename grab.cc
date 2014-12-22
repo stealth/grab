@@ -433,7 +433,7 @@ int main(int argc, char **argv)
 				cerr<<"pthread_create: "<<strerror(r)<<endl;
 				exit(-1);
 			}
-            set_thread_affinity(&tids[i], i);
+			set_thread_affinity(&tids[i], i);
 		}
 
 		for (int i = 0; i < cores; ++i) {
