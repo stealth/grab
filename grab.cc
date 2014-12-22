@@ -233,6 +233,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		int ovector[3] = {-1}, rc = 0;
 		const char *start = content, *end = content + clen;
 		char before[256], after[256];
+		bool print_results = false;
 
 		for (;;) {
 			memset(ovector, 0, sizeof(ovector));
@@ -240,6 +241,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 			if (rc <= 0)
 				break;
 
+			print_results = true;
 			if (recursive || print_path)
 				str<<path<<": ";
 
@@ -272,6 +274,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 			start += ovector[1] + a;
 		}
 
+		if (print_results) {
 #ifdef BUILD_WITH_PARALLELISM
 		pthread_mutex_lock(&stdout_lock);
 #endif
@@ -283,6 +286,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 #endif
 
 		str.flush();
+		}
 
 		munmap(content, clen);
 	}
