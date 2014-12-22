@@ -346,15 +346,15 @@ void usage(const string &p)
 static void set_thread_affinity(pthread_t *thread, int coreno)
 {
 #ifdef __linux__
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(coreno, &cpuset);
-    int r = pthread_setaffinity_np(*thread, sizeof(cpuset), &cpuset);
-    if (r != 0) {
-        cerr<<"pthread_setaffinity_np:"<<strerror(r)
-            <<" (more threads than cores?)"<<endl;
-        exit(-1);
-    }
+	cpu_set_t cpuset;
+	CPU_ZERO(&cpuset);
+	CPU_SET(coreno, &cpuset);
+	int r = pthread_setaffinity_np(*thread, sizeof(cpuset), &cpuset);
+	if (r != 0) {
+		cerr<<"pthread_setaffinity_np:"<<strerror(r)
+			<<" (more threads than cores?)"<<endl;
+		exit(-1);
+	}
 #endif
 }
 
