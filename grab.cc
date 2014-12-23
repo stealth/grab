@@ -437,8 +437,8 @@ int main(int argc, char **argv)
 
 		FileGrep *tgrep = NULL;
 		cpu_set_t cpuset;
-		thread_arg ta[cores];
-		pthread_t tids[cores];
+		thread_arg *ta = new thread_arg[cores];
+		pthread_t *tids = new pthread_t[cores];
 		int r = 0;
 
 		for (int i = 0; i < cores; ++i) {
@@ -468,6 +468,9 @@ int main(int argc, char **argv)
 			pthread_join(tids[i], NULL);
 			delete ta[i].grep;
 		}
+
+		delete [] ta;
+		delete [] tids;
 
 		exit(0);
 
