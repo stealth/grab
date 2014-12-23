@@ -70,10 +70,9 @@ class FileGrep {
 	std::string err;
 	static std::string start_inv, stop_inv;
 	int minlen;
-	char *mmap_buf;
-	size_t clen;
-	bool print_line, print_offset, recursive, colored, print_path;
+	bool print_line, print_offset, recursive, colored, print_path, single_match, low_mem;
 
+	uid_t my_uid;
 
 	pcre *pcreh;
 	pcre_extra *extra;
@@ -151,9 +150,10 @@ int thread_walk(const char *path, const struct stat *st, int typeflag, struct FT
 
 
 FileGrep::FileGrep()
-	: err(""), minlen(1), mmap_buf(fail_addr), clen(0),
-	  print_line(1), print_offset(0), recursive(0), colored(0), print_path(0), pcreh(NULL), extra(NULL)
+	: err(""), minlen(1), print_line(1), print_offset(0), recursive(0),
+          colored(0), print_path(0), single_match(0), low_mem(0), pcreh(NULL), extra(NULL)
 {
+	my_uid = geteuid();
 }
 
 
@@ -172,6 +172,10 @@ void FileGrep::config(const std::map<std::string, int> &config)
 		print_line = 0;
 	if (config.count("offsets") > 0)
 		print_offset = 1;
+	if (config.count("single") > 0)
+		single_match = 1;
+	if (config.count("low_mem") > 0)
+		low_mem = 1;
 }
 
 
@@ -200,6 +204,11 @@ int FileGrep::prepare(const string &regex)
 }
 
 
+enum mmap_flags_t {
+	mmap_flags = MAP_PRIVATE|MAP_NORESERVE
+};
+
+
 int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 {
 	size_t clen = st->st_size;
@@ -207,14 +216,22 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		return 0;
 
 	int fd;
-	if ((fd = open(path, O_RDONLY|O_NOCTTY)) < 0) {
+	int flags = O_RDONLY|O_NOCTTY;
+
+	// try to avoid caching of large files which we just open for the grep
+	if (st->st_size >= (off_t)chunk_size && low_mem)
+		flags |= O_DIRECT;
+	if (st->st_uid == my_uid || my_uid == 0)
+		flags |= O_NOATIME;
+
+	if ((fd = open(path, flags)) < 0) {
 		err = "FileGrep::find::open: " + string(strerror(errno));
 		return -1;
 	}
 
 	char *content = NULL;
 	int overlap = 0x1000;
-	stringstream str;
+	ostringstream str;
 
 	for (off_t off = 0; off < st->st_size; off += (chunk_size - overlap)) {
 		if (st->st_size - off < (off_t)chunk_size)
@@ -222,9 +239,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		else
 			clen = chunk_size;
 
-		if ((content = (char *)mmap(NULL, clen,
-		                            PROT_READ, MAP_PRIVATE||MAP_NORESERVE|MAP_POPULATE,
-		                            fd, off)) == fail_addr) {
+		if ((content = (char *)mmap(NULL, clen, PROT_READ, mmap_flags, fd, off)) == fail_addr) {
 			err = "FileGrep::find::mmap: " + string(strerror(errno));
 			close(fd);
 			return -1;
@@ -270,21 +285,31 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 			}
 
 			start += ovector[1] + a;
+
+			if (single_match)
+				break;
 		}
 
-#ifdef BUILD_WITH_PARALLELISM
-		pthread_mutex_lock(&stdout_lock);
-#endif
-
-		cout<<str.str();
-
-#ifdef BUILD_WITH_PARALLELISM
-		pthread_mutex_unlock(&stdout_lock);
-#endif
-
-		str.flush();
-
 		munmap(content, clen);
+
+		if (str.str().size() > 0) {
+#ifdef BUILD_WITH_PARALLELISM
+			pthread_mutex_lock(&stdout_lock);
+#endif
+
+			cout<<str.str();
+
+#ifdef BUILD_WITH_PARALLELISM
+			pthread_mutex_unlock(&stdout_lock);
+#endif
+
+			str.flush();
+			str.clear();
+			str.str("");
+
+			if (single_match)
+				break;
+		}
 	}
 
 	close(fd);
@@ -336,7 +361,7 @@ void *find_iterative(void *vp)
 
 void usage(const string &p)
 {
-	cout<<"Usage: "<<p<<" [-rR] [-I] [-O] [-l] [-n <cores>] <regex> <path>\n";
+	cout<<"Usage: "<<p<<" [-rR] [-I] [-O] [-L] [-l] [-s] [-n <cores>] <regex> <path>\n";
 	exit(1);
 }
 
@@ -346,17 +371,26 @@ int main(int argc, char **argv)
 	int c = 0;
 	map<string, int> config;
 
-	while ((c = getopt(argc, argv, "Rrn:IOl")) != -1) {
+	while ((c = getopt(argc, argv, "Rrn:IOlsL")) != -1) {
 		switch (c) {
 		case 'r':
 		case 'R':
 			config["recursive"] = 1;
+			break;
+		case 's':
+			config["single"] = 1;
 			break;
 		case 'O':
 			config["offsets"] = 1;
 			break;
 		case 'l':
 			config["noline"] = 1;
+			break;
+		case 'L':
+			config["low_mem"] = 1;
+			chunk_size >>= 1;
+			if (chunk_size < (1<<25))
+				chunk_size = 1<<25;
 			break;
 		case 'I':
 			if (isatty(1))

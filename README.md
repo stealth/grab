@@ -13,6 +13,10 @@ Options:
  -l     -- do not print the matching line (Useful if you want
            to see _all_ offsets; if you also print the line, only
            the first match in the line counts)
+ -s     -- single match; dont search file further after first match
+           (similar to grep on a binary)
+ -L     -- machine has low mem; half chunk-size (default 1GB)
+           may be used multiple times
  -I     -- enable highlighting of matches
  -c <n> -- Use n cores in parallel (useless and even slower in most situations)
            n <= 1 uses single-core
@@ -28,7 +32,7 @@ _grab_ uses the _pcre_ library, so basically its equivalent to a `grep -P -a`
 Why is it faster?
 -----------------
 
-_grab_ is using `mmap(2)` with `MAP_POPULATE` and matches the whole file blob
+_grab_ is using `mmap(2)` and matches the whole file blob
 without counting newlines (which _grep_ is doing even if there is no match)
 which is a lot faster than reading the file in chunks and counting the
 newlines. If available, _grab_ also uses the PCRE JIT feature.
@@ -54,9 +58,11 @@ If you measure _grep_ vs. _grab_, keep in mind to drop the dentry and page
 caches between each run: `echo 3 > /proc/sys/vm/drop_caches`
 
 _grab_ was made to quickly grep through large directory trees. The original grep
-has by far a more complete option-set. _grab_ is therefore not pipe-able; the speedup
+has by far a more complete option-set. The speedup
 for a single file match is very small, if at all (stdin cannot be
 mmapped and I am too lazy to add a pread() workaround just for this
 useless case)
 
+For SSD's, the multicore option can make sense. For HDD's it doesnt since
+the head has to be positioned back and forth between the threads, which kills performance.
 
