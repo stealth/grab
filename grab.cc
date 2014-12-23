@@ -218,11 +218,15 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 	int fd;
 	int flags = O_RDONLY|O_NOCTTY;
 
+#ifdef __linux__
 	// try to avoid caching of large files which we just open for the grep
 	if (st->st_size >= (off_t)chunk_size && low_mem)
 		flags |= O_DIRECT;
+	// try to avoid marking inode dirty
 	if (st->st_uid == my_uid || my_uid == 0)
 		flags |= O_NOATIME;
+#endif
+
 
 	if ((fd = open(path, flags)) < 0) {
 		err = "FileGrep::find::open: " + string(strerror(errno));
