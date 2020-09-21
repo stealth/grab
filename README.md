@@ -1,9 +1,10 @@
-grab - simple but very fast grep
-================================
+grab - simple, but very fast grep
+=================================
 
 This is my own, experimental, parallel version of _grep_ so I can test
 various strategies to speed up access to large directory trees.
-On SSD's you can easily outsmart common greps by up to 100%.
+On Flash storage or SSDs, you can easily outsmart common greps by up
+to 200%.
 
 Options:
 
@@ -17,8 +18,8 @@ Options:
            (similar to grep on a binary)
  -L     -- machine has low mem; half chunk-size (default 1GB)
            may be used multiple times
- -I     -- enable highlighting of matches
- -c <n> -- Use n cores in parallel (useless and even slower in most situations)
+ -I     -- enable highlighting of matches (useful)
+ -n <n> -- Use n cores in parallel (recommended for flash/SSD)
            n <= 1 uses single-core
  -r     -- recurse on directory
  -R     -- same as -r
@@ -33,21 +34,22 @@ Why is it faster?
 -----------------
 
 _grab_ is using `mmap(2)` and matches the whole file blob
-without counting newlines (which _grep_ is doing even if there is no match)
-which is a lot faster than reading the file in chunks and counting the
+without counting newlines (which _grep_ is doing even if there is no match
+[as of a grep code review of mine in 2012; things may be different today])
+which is a lot faster than `read(2)`-ing the file in small chunks and counting the
 newlines. If available, _grab_ also uses the PCRE JIT feature.
-However, speedups are only measurable on fast HDD's or SSD's. In the later
-case, the speedup can be really drastically (even up to 100%) if matching
-recursively. So clearly, the storage is the bottleneck, and parallelizing
-the search is in most cases even slower, as the seeking takes more time
-than just doing stuff in linear; even on SSD's.
+However, speedups are only measurable on large file trees or fast HDDs or SSDs.
+In the later case, the speedup can be really drastically (up to 3 times faster)
+if matching recursively and in parallel. Since storage is the bottleneck,
+parallelizing the search on HDDs makes no sense, as the seeking takes more time
+than just doing stuff in linear.
 
 Additionally, _grab_ is skipping files which are too small to contain the
 regular expression. For larger regex's in a recursive search, this can
 skip quite good amount of files without even opening them.
 
 A quite new pcre lib is required, on some older systems the build can fail
-due to `PCRE_INFO_MINLENGTH` and `pcre_study()`.
+due to a missing `PCRE_INFO_MINLENGTH` and `pcre_study()`.
 
 Files are mmaped and matched in chunks of 1Gig. For files which are larger,
 the last 4096 byte (1 page) of a chunk are overlapped, so that matches on a 1 Gig
@@ -57,12 +59,67 @@ same offset).
 If you measure _grep_ vs. _grab_, keep in mind to drop the dentry and page
 caches between each run: `echo 3 > /proc/sys/vm/drop_caches`
 
-_grab_ was made to quickly grep through large directory trees. The original grep
-has by far a more complete option-set. The speedup
-for a single file match is very small, if at all (stdin cannot be
-mmapped and I am too lazy to add a pread() workaround just for this
-useless case)
+Note, that _grep_ will print only a 'Binary file matches', if it detects binary
+files, while _grab_ will print all matches, unless `-s` is given. So, for a
+speed test you have to search for an expression that *does not* exist in the data,
+in order to enforce searching of the entire files.
 
-For SSD's, the multicore option can make sense. For HDD's it doesnt since
-the head has to be positioned back and forth between the threads, which kills performance.
+_grab_ was made to quickly grep through large directory trees without indexing.
+The original _grep_ has by far a more complete option-set. The speedup
+for a single file match is very small, if at all measureable.
+
+For SSDs, the multicore option makes sense. For HDDs it does not, since
+the head has to be positioned back and forth between the threads, potentially
+destroying the locality principle and killing performance.
+
+Whats left to note: _grab_ will traverse directories *physically*, i.e. it will not follow
+symlinks.
+
+
+Examples
+--------
+
+This shows the speedup on a 4-core machine with a search on a SSD:
+
+
+```
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time grep -r foobardoesnotexist /source/linux
+
+real	0m34.811s
+user	0m3.710s
+sys	0m10.936s
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time grab -r foobardoesnotexist /source/linux
+
+real	0m31.629s
+user	0m4.984s
+sys	0m8.690s
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time grab -n 2 -r foobardoesnotexist /source/linux
+
+real	0m15.203s
+user	0m3.689s
+sys	0m4.665s
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time grab -n 4 -r foobardoesnotexist /source/linux
+
+real	0m13.135s
+user	0m4.023s
+sys	0m5.581s
+```
+
+In the single core comparison, speedup also depends on which CPU the kernel
+actually scheduls the _grep_, so a _grab_ may or may not be faster (mostly it is).
+If the load is equal among the single-core tests, _grab_ will see a speedup if
+searching on large file trees. On multi-core setups, _grab_ can benefit ofcorse.
+
+Maybe todo
+----------
+
+_grep's_ directory traversing seems to be more efficient than what `nftw(3)` provides
+(`fstat(2)` vs. `stat(2)`), so _grab_ may be further optimized with its own `nftw()`
+implementation, as well as by  using all the fancy `unlikely()` macros to produce
+less instruction cache misses etc. For data cacheline alignment etc., that's part
+of what libpcre has to provide when doing the crunchy regex matching.
 
