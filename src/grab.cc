@@ -46,20 +46,20 @@
 #include <pcre.h>
 #include "grab.h"
 
-#ifdef BUILD_WITH_PARALLELISM
-
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 #include <pthread.h>
 
-pthread_mutex_t stdout_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#endif
-
-
 using namespace std;
 
+
+extern grab::FileGrep *grep;
+
+
+namespace grab {
+
+pthread_mutex_t stdout_lock = PTHREAD_MUTEX_INITIALIZER;
 
 char *const fail_addr = (char *)-1;
 
@@ -215,15 +215,10 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		munmap(content, clen);
 
 		if (str.str().size() > 0) {
-#ifdef BUILD_WITH_PARALLELISM
+
 			pthread_mutex_lock(&stdout_lock);
-#endif
-
 			cout<<str.str();
-
-#ifdef BUILD_WITH_PARALLELISM
 			pthread_mutex_unlock(&stdout_lock);
-#endif
 
 			str.flush();
 			str.clear();
@@ -257,9 +252,6 @@ int FileGrep::find(const string &path)
 }
 
 
-extern FileGrep *grep;
-
-
 int walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwbuf)
 {
 	if (typeflag == FTW_F) {
@@ -279,4 +271,5 @@ int FileGrep::find_recursive(const string &path)
 }
 
 
+}
 

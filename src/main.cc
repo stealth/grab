@@ -45,57 +45,57 @@
 #include <ftw.h>
 #include <pcre.h>
 #include "grab.h"
-
-#ifdef BUILD_WITH_PARALLELISM
+#include "nftw.h"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 #include <pthread.h>
 
-#endif
-
 
 using namespace std;
+using namespace grab;
 
 
 FileGrep *grep = nullptr;
 
+thread_local FileGrep *tgrep = nullptr;
+
+pthread_mutex_t start_lck = PTHREAD_MUTEX_INITIALIZER;
 
 struct thread_arg {
 	int idx, nthreads;
+	string path;
 	FileGrep *grep;
 };
 
-vector<string> files;
-vector<struct stat> stats;
 
-
-int thread_walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwbuf)
+int thread_grep_once(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
 {
 	if (typeflag == FTW_F) {
-		if (S_ISREG(st->st_mode)) {
-			files.push_back(path);
-			stats.push_back(*st);
-		}
+		if (S_ISREG(st->st_mode))
+			return tgrep->find(path, st, FTW_F);
 	}
 	return 0;
 }
 
 
+
+
+
 void *find_iterative(void *vp)
 {
-	string path = "";
-	struct stat st;
 	thread_arg *ta = static_cast<thread_arg *>(vp);
-	FileGrep *grep = ta->grep;
 
-	int vsize = files.size();
-	for (int i = ta->idx; i < vsize; i += ta->nthreads) {
-		path = files[i];
-		st = stats[i];
-		grep->find(path.c_str(), &st, FTW_F);
-	}
+	// thread_local
+	tgrep = ta->grep;
+
+	pthread_mutex_lock(&start_lck);
+	pthread_mutex_unlock(&start_lck);
+
+	while (t_nftw(ta->path.c_str(), thread_grep_once, 1024, FTW_PHYS) == 1)
+		;
+
 	return nullptr;
 }
 
@@ -139,11 +139,7 @@ int main(int argc, char **argv)
 				config["color"] = 1;
 			break;
 		case 'n':
-#ifndef BUILD_WITH_PARALLELISM
-			cerr<<"Built without multicore support! Ignoring.\n";
-#else
 			config["cores"] = atoi(optarg);
-#endif
 			break;
 		default:
 			usage(argv[0]);
@@ -160,7 +156,6 @@ int main(int argc, char **argv)
 	regex = argv[optind++];
 	path = argv[optind++];
 
-#ifdef BUILD_WITH_PARALLELISM
 	int cores = config["cores"];
 	if (cores > 1) {
 
@@ -172,14 +167,6 @@ int main(int argc, char **argv)
 		chunk_size >>= 2;
 		config["chunk_size"] = chunk_size;
 
-		files.reserve(1<<20);
-		stats.reserve(1<<20);
-
-		nftw(path.c_str(), thread_walk, 1024, FTW_PHYS);
-
-		files.shrink_to_fit();
-		stats.shrink_to_fit();
-
 		FileGrep *tgrep = nullptr;
 		cpu_set_t cpuset;
 		thread_arg *ta = new (nothrow) thread_arg[cores];
@@ -190,19 +177,26 @@ int main(int argc, char **argv)
 			return -1;
 		}
 
-		int r = 0;
-
 		for (int i = 0; i < cores; ++i) {
 			tgrep = new (nothrow) FileGrep;
 			tgrep->config(config);
 			tgrep->prepare(regex);
 			tgrep->recurse();
-			CPU_ZERO(&cpuset);
-			CPU_SET(i, &cpuset);
-
 			ta[i].grep = tgrep;
 			ta[i].idx = i;
 			ta[i].nthreads = cores;
+			ta[i].path = path;
+		}
+
+		int r = 0;
+
+		// Avoid head start of the first thread. Thats also why above and below loops
+		// are split, even though they could be merged.
+		pthread_mutex_lock(&start_lck);
+
+		for (int i = 0; i < cores; ++i) {
+			CPU_ZERO(&cpuset);
+			CPU_SET(i, &cpuset);
 
 			if ((r = pthread_create(tids + i, nullptr, find_iterative, ta + i)) != 0) {
 				cerr<<"pthread_create: "<<strerror(r)<<endl;
@@ -214,6 +208,9 @@ int main(int argc, char **argv)
 				exit(-1);
 			}
 		}
+
+		// Go, go, go ...
+		pthread_mutex_unlock(&start_lck);
 
 		for (int i = 0; i < cores; ++i) {
 			pthread_join(tids[i], nullptr);
@@ -227,7 +224,6 @@ int main(int argc, char **argv)
 
 	}
 
-#endif
 	if (!(grep = new (nothrow) FileGrep)) {
 		cerr<<"Out of memory.\n";
 		return -1;

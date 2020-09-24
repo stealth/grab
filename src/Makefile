@@ -16,16 +16,19 @@ LIBS+=-lpcre
 # For OSX (Darwin), just disable the parallel build, as
 # it has no cpu_set_t
 
-DEFS=-DBUILD_WITH_PARALLELISM
+DEFS=
 LIBS+=-pthread
 
-all: grab
+all: greppin
 
-grab: grab.o main.o
-	$(CXX) $(LIBS) grab.o main.o -o grab
+greppin: grab.o main.o nftw.o
+	$(CXX) $(LIBS) grab.o main.o nftw.o -o greppin
 
 main.o: main.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o main.o
+
+nftw.o: nftw.cc
+	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o nftw.o
 
 grab.o: grab.cc grab.h
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o grab.o

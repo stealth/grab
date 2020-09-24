@@ -36,6 +36,8 @@
 #include <string>
 #include <pcre.h>
 
+namespace grab {
+
 class FileGrep {
 
 	std::string d_err{""};
@@ -84,6 +86,7 @@ public:
 	int find_recursive(const std::string &);
 };
 
+}
 
 #endif
 
