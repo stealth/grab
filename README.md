@@ -1,10 +1,14 @@
 grab - simple, but very fast grep
 =================================
 
+
+![greppin](https://github.com/stealth/grab/blob/greppin/pic/greppin.jpg)
+
+
 This is my own, experimental, parallel version of _grep_ so I can test
 various strategies to speed up access to large directory trees.
 On Flash storage or SSDs, you can easily outsmart common greps by up
-to 200%.
+a factor of 8.
 
 Options:
 
@@ -28,6 +32,26 @@ Options:
 
 
 _grab_ uses the _pcre_ library, so basically its equivalent to a `grep -P -a`
+
+
+Build
+-----
+
+There are two branches. `master` and `greppin`. Master is the 'traditional'
+*grab* that should compile and run on most POSIX systems. `greppin` comes with
+its own optimized and parallelized version of `nftw()` and `readdir()`, which
+again doubles speed on the top of speedup that the `master` branch already
+provides. However, the `greppin` branch only runs on Linux.
+
+```
+$ make
+```
+
+or
+
+```
+$ git checkout greppin; make clean; make
+```
 
 
 Why is it faster?
@@ -72,6 +96,12 @@ For SSDs, the multicore option makes sense. For HDDs it does not, since
 the head has to be positioned back and forth between the threads, potentially
 destroying the locality principle and killing performance.
 
+The `greppin` branch uses its own parallel version of `nftw()`, so the time
+of idling of N - 1 cores when the 1st core builds the directory tree can also
+be used for working. Additional to that, since locking is required in the
+threads anyway, it also comes with its own faster and lockfree `readdir()` implementation
+to save quite some `futex()` calls.
+
 Whats left to note: _grab_ will traverse directories *physically*, i.e. it will not follow
 symlinks.
 
@@ -109,17 +139,43 @@ user	0m4.023s
 sys	0m5.581s
 ```
 
+With `greppin` branch:
+
+```
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time grep -a -P -r linus /source/linux/|wc -l
+16918
+
+real    1m12.470s
+user    0m49.548s
+sys     0m6.162s
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# time greppin -n 4 -r linus /S/source/linux/|wc -l
+16918
+
+real    0m8.773s
+user    0m4.670s
+sys     0m5.837s
+root@lucifer:~#
+```
+
+Yes! ~ 9s vs. ~ 72s! Thats 8x as fast on a 4-core SSD machine as the traditional grep.
+
+Just to proof that it resulted in the same output:
+
+```
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# greppin -n 4 -r linus /source/linux/|sort|md5sum
+a1f9fe635bd22575a4cce851e79d26a0  -
+root@linux:~# echo 3 > /proc/sys/vm/drop_caches
+root@linux:~# grep -P -a -r linus /S/source/linux/|sort|md5sum
+a1f9fe635bd22575a4cce851e79d26a0  -
+root@linux:~#
+```
+
+
 In the single core comparison, speedup also depends on which CPU the kernel
 actually scheduls the _grep_, so a _grab_ may or may not be faster (mostly it is).
 If the load is equal among the single-core tests, _grab_ will see a speedup if
 searching on large file trees. On multi-core setups, _grab_ can benefit ofcorse.
-
-Maybe todo
-----------
-
-_grep's_ directory traversing seems to be more efficient than what `nftw(3)` provides
-(`fstat(2)` vs. `stat(2)`), so _grab_ may be further optimized with its own `nftw()`
-implementation, as well as by  using all the fancy `unlikely()` macros to produce
-less instruction cache misses etc. For data cacheline alignment etc., that's part
-of what libpcre has to provide when doing the crunchy regex matching.
 
