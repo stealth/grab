@@ -170,7 +170,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 
 		int ovector[3] = {-1}, rc = 0;
 		const char *start = content, *end = content + clen;
-		char before[256] = {0}, after[256] = {0};
+		char before[512] = {0}, after[512] = {0};
 
 		for (;start + d_minlen < end;) {
 
@@ -180,23 +180,21 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 				break;
 
 			if (d_recursive || d_print_path)
-				str<<path<<": ";
+				str<<path<<":";
 
 			if (d_print_offset)
 				str<<"Match at offset "<<off + start - content + (int)ovector[0]<<endl;
 
-			uint8_t a = 0, b = sizeof(before) - 1;
+			uint16_t a = 0, b = sizeof(before) - 1;
 			if (d_print_line) {
 				const char *ptr = start + ovector[0] - 1;
 
 				while (ptr >= start && *ptr != '\n' && b > 0)
 					before[b--] = *ptr--;
-				before[b] = 0;
 				ptr = start + ovector[1];
 				while (ptr < end && *ptr != '\n' && a < sizeof(after) - 1)
 					after[a++] = *ptr++;
-				after[a] = 0;
-				str<<string(before + b, sizeof(before) - b);
+				str<<string(before + b + 1, sizeof(before) - b - 1);
 				if (d_colored)
 					str<<start_inv;
 				str<<string(start + ovector[0], ovector[1] - ovector[0]);
