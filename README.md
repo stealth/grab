@@ -2,7 +2,7 @@ grab - simple, but very fast grep
 =================================
 
 
-![greppin](https://github.com/stealth/greppin/blob/greppin/pic/greppin.jpg)
+![greppin](https://github.com/stealth/grab/blob/greppin/pic/greppin.jpg)
 
 
 This is my own, experimental, parallel version of _grep_ so I can test
