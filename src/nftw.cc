@@ -62,11 +62,10 @@ struct DIR {
 	int32_t fd;
 	int32_t align;
 
-	uint64_t alloc;
 	uint64_t size;
 	uint64_t offset;
 
-	char data[0x10000 - 4*8];
+	char data[0x10000 - 3*8];
 };
 
 // Removed d_type, so it matches linux_dirent struct and we
@@ -113,21 +112,19 @@ static DIR *opendir(const char *path)
 static dirent *readdir(DIR *dp)
 {
 	dirent *de = nullptr;
+	ssize_t n = 0;
 
 	do {
 		if (dp->offset >= dp->size) {
-
-			ssize_t bytes = 0;
-
-			if ((bytes = syscall(SYS_getdents, dp->fd, dp->data, sizeof(dp->data))) <= 0) {
+			if ((n = syscall(SYS_getdents, dp->fd, dp->data, sizeof(dp->data))) <= 0) {
 				de = nullptr;
 				break;
 			}
-			dp->size = (uint64_t)bytes;
+			dp->size = static_cast<uint64_t>(n);
 			dp->offset = 0;
 		}
 
-		de = (dirent *)&dp->data[dp->offset];
+		de = reinterpret_cast<dirent *>(&dp->data[dp->offset]);
 		dp->offset += de->d_reclen;
 
 	} while (de->d_ino == 0);
@@ -210,14 +207,12 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		pathname = dirmap[dfd];
 	}
 
-	pthread_mutex_unlock(&lck);
-
 	// No longer uninited; we filled dirvec at least once at this point
 	initial.store(0);
 
+	// lock is still held on entry, and the loop is ment to execute just
+	// once in most cases, so take care to lock in the "continue" case
 	for (;;) {
-
-		pthread_mutex_lock(&lck);
 
 		if ((de = readdir(dfd)) == nullptr) {
 
@@ -241,20 +236,25 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 			break;
 		}
 
+		// still locked, no need to lock again in continue
+		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
+			continue;
+
 		string d_name = de->d_name;
 
 		pthread_mutex_unlock(&lck);
-
-		if (d_name == "." || d_name == "..")
-			continue;
 
 		string p = pathname;
 		if (p[p.size() - 1] != '/')
 			p += "/";
 		p += d_name;
 
-		if (lstat(p.c_str(), &lst) < 0)
+		// unlocked, so lock again in continue to have lock on readdir()
+		if (lstat(p.c_str(), &lst) < 0) {
+			pthread_mutex_lock(&lck);
 			continue;
+		}
+
 		// dont follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
 			nftw_once(p.c_str(), fn, 1);
