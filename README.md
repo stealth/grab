@@ -31,7 +31,9 @@ Options:
 ```
 
 
-_grab_ uses the _pcre_ library, so basically its equivalent to a `grep -P -a`
+_grab_ uses the _pcre_ library, so basically its equivalent to a `grep -P -a`.
+The `-P` is important, since Perl-Compatible Regular Expressions have different
+characteristics than basic regexes.
 
 
 Build
@@ -96,13 +98,13 @@ For SSDs, the multicore option makes sense. For HDDs it does not, since
 the head has to be positioned back and forth between the threads, potentially
 destroying the locality principle and killing performance.
 
-The `greppin` branch uses its own parallel version of `nftw()`, so the time
+The `greppin` branch features its own parallel version of `nftw()`, so the time
 of idling of N - 1 cores when the 1st core builds the directory tree can also
 be used for working. Additional to that, since locking is required in the
 threads anyway, it also comes with its own faster and lockfree `readdir()` implementation
 to save quite some `futex()` calls.
 
-Whats left to note: _grab_ will traverse directories *physically*, i.e. it will not follow
+Whats left to note: _grab_ will traverse directories _physically_, i.e. it will not follow
 symlinks.
 
 
@@ -150,13 +152,13 @@ real    1m12.470s
 user    0m49.548s
 sys     0m6.162s
 root@linux:~# echo 3 > /proc/sys/vm/drop_caches
-root@linux:~# time greppin -n 4 -r linus /S/source/linux/|wc -l
+root@linux:~# time greppin -n 4 -r linus /source/linux/|wc -l
 16918
 
 real    0m8.773s
 user    0m4.670s
 sys     0m5.837s
-root@lucifer:~#
+root@linux:~#
 ```
 
 Yes! ~ 9s vs. ~ 72s! Thats 8x as fast on a 4-core SSD machine as the traditional grep.
@@ -168,7 +170,7 @@ root@linux:~# echo 3 > /proc/sys/vm/drop_caches
 root@linux:~# greppin -n 4 -r linus /source/linux/|sort|md5sum
 a1f9fe635bd22575a4cce851e79d26a0  -
 root@linux:~# echo 3 > /proc/sys/vm/drop_caches
-root@linux:~# grep -P -a -r linus /S/source/linux/|sort|md5sum
+root@linux:~# grep -P -a -r linus /source/linux/|sort|md5sum
 a1f9fe635bd22575a4cce851e79d26a0  -
 root@linux:~#
 ```
@@ -178,4 +180,72 @@ In the single core comparison, speedup also depends on which CPU the kernel
 actually scheduls the _grep_, so a _grab_ may or may not be faster (mostly it is).
 If the load is equal among the single-core tests, _grab_ will see a speedup if
 searching on large file trees. On multi-core setups, _grab_ can benefit ofcorse.
+
+
+What about ripgrep?
+-------------------
+
+I was asked several times how _grab_ would compare against [ripgrep](https://github.com/BurntSushi/ripgrep)
+so I downloaded their official build `ripgrep-12.1.1-x86_64-unknown-linux-musl.tar.gz`
+and run it on the same 4-core SSD machine as in the above tests. _ripgrep_ has
+by far more options and compares much better to the traditional _grep_ than _grab_
+does. Its written in **Rust** and is also using a parallelized directory iterator
+(as I learned from their README). Still, _greppin_ is __faster by a factor of 3__.
+Since _ripgrep_ will ignore lot of files (for good reason) when running against
+a git repo, I also run it against `/usr`. It can be seen that _greppin_
+is still faster, and 'equally fast' when scanning the _entire git repo_ (printing
+16918 matches vs. 247) versus _ripgrep_ with skipping a lot of files in between.
+Between the runs, the `echo 3 > /proc/sys/vm/drop_caches` has been made in order
+to minimize caching effects. Also note that due to JIT engines inside most regex
+implementations, memory `rwx` mappings have to be allowed for maximum performance.
+On grsec for example, you would need to
+
+```
+setfattr -n user.pax.flags -v "m" /path/to/rg
+```
+
+Since I was using an untrusted binary download, I didnt run the tests as root
+this time, which is perfectly OK. Above tests were run as root for the vm-dropping
+shortcut without the need to setup sudo rules. It requires redirecting `stderr` to
+`/dev/zero` though, in order to eliminate junk output:
+
+```
+source@linux:~$ time rg -a -P linus /source/linux|wc -l
+247
+
+real    0m7.123s
+user    0m8.092s
+sys     0m3.284s
+source@linux:~$ time greppin -n 4 -r linus /source/linux|wc -l
+16918
+
+real    0m8.756s
+user    0m4.319s
+sys     0m5.454s
+source@lnux:~$ time rg -a -P linus /usr 2>/dev/zero|wc -l
+192
+
+real    0m51.108s
+user    2m23.315s
+sys     0m10.981s
+source@linux:~$ time rg -j 4 -a -P linus /usr 2>/dev/zero|wc -l
+192
+
+real    0m48.952s
+user    2m15.765s
+sys     0m10.679s
+
+source@linux:~$ time greppin -n 4 -r linus /usr 2>/dev/zero|wc -l
+192
+
+real    0m17.476s
+user    0m7.445s
+sys     0m10.202s
+source@linux:~$
+```
+
+When using non-Perl regexes in _ripgrep_ such as with `-a -N -e linus` both runs are
+equally fast, but thats an odd comparison, since PCRE's are much more powerful and
+potentially slower to match than basic regular expressions.
+
 
