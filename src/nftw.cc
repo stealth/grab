@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2020 Sebastian Krahmer.
+ * Copyright (C) 2020 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,6 +48,8 @@
 #endif
 #include <sys/syscall.h>
 #include <pthread.h>
+
+#include "nftw.h"
 
 
 using namespace std;
@@ -170,12 +172,7 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 	if (!recursed && inflight.load() == 1 && initial.load() == 0 && dirvec.empty()) {
 		--inflight;
 		finished.store(1);
-		dirvec.clear();
-
-		// call the defered closedir(). It will take care
-		// to not double-close underlying fd
-		for (auto &d : dirmap)
-			closedir(d.first);
+		// dirvec already empty
 		dirmap.clear();
 		pthread_mutex_unlock(&lck);
 		return 0;
@@ -200,7 +197,12 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 			return 1;
 		}
 		dirvec.push_back(dfd);
-		dirmap.insert(make_pair(dfd, dir));
+
+		// must use operator[] and can't use insert(), because insert() would not overwrite
+		// existing entries, and since we might closedir/opendir/... and therefore re-cycle 'dfd' allocs,
+		// and do not erase() map elements when we remove it from dirvec, we would end up with
+		// wrong mappings
+		dirmap[dfd] = dir;
 		pathname = dir;
 	} else {
 		dfd = dirvec.back();
@@ -217,21 +219,12 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		if ((de = readdir(dfd)) == nullptr) {
 
 			// This is thhe only place where its allowed to remove DIRs from dirvec:
-			// All entries have been read.
-			for (auto it = dirvec.begin(); it != dirvec.end(); ++it) {
-				if (*it == dfd) {
-					dirvec.erase(it);
-					break;
-				}
-			}
-
-			// defer closedir() as its also freeing memory that
-			// might still be pointed to by other threads: readdir() returns ptr pointing
-			// inside DIR. So only free DIRs when nobody is needing any
-			// of them anymore
-			close(dfd->fd);
-			dfd->fd = -1;
-
+			// All entries have been read. dfd if the last entry, so it can just be popped.
+			// This is since we continously locked dirvec and no other thread could
+			// have pushed or popped something in between.
+			dirvec.pop_back();
+			closedir(dfd);
+			dfd = nullptr;
 			pthread_mutex_unlock(&lck);
 			break;
 		}
@@ -249,13 +242,10 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 			p += "/";
 		p += d_name;
 
-		// unlocked, so lock again in continue to have lock on readdir()
-		if (lstat(p.c_str(), &lst) < 0) {
-			pthread_mutex_lock(&lck);
-			continue;
-		}
+		if (lstat(p.c_str(), &lst) < 0)
+			break;
 
-		// dont follow symlinks into directories
+		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
 			nftw_once(p.c_str(), fn, 1);
 		} else if (S_ISREG(lst.st_mode)) {
@@ -271,11 +261,55 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 }
 
 
-// nopenfd is ignored
-int t_nftw(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
+// Parallel + racursive nftw() version for multicore. nopenfd is ignored
+int nftw_multi(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
 	return nftw_once(dir, fn, 0);
 }
+
+
+// Single threaded version, no locking required. nopenfd is ignored
+int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
+{
+	DIR *dfd = nullptr;
+	struct dirent *de = nullptr;
+	struct stat lst;
+
+	if ((dfd = opendir(dir)) == nullptr)
+		return -1;
+
+	for (;;) {
+
+		if ((de = readdir(dfd)) == nullptr) {
+			closedir(dfd);
+			return 0;
+		}
+
+		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
+			continue;
+
+		string p = dir;
+		if (p[p.size() - 1] != '/')
+			p += "/";
+		p += de->d_name;
+
+		if (lstat(p.c_str(), &lst) < 0)
+			continue;
+
+		// don't follow symlinks into directories
+		if (S_ISDIR(lst.st_mode)) {
+			nftw_single(p.c_str(), fn, nopenfd, flags);
+		} else if (S_ISREG(lst.st_mode)) {
+			fn(p.c_str(), &lst, FTW_F, nullptr);
+		}
+		// ignore symlinks and other files
+
+	}
+
+	return 0;
+}
+
+
 
 }
 

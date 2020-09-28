@@ -6,7 +6,15 @@
 
 namespace grab {
 
-int t_nftw(const char *, int (*fn) (const char *, const struct stat *, int, void *), int, int);
+enum {
+	FTW_PHYS	= 1,
+	FTW_F		= 0x1000
+
+};
+
+int nftw_multi(const char *, int (*fn) (const char *, const struct stat *, int, void *), int, int);
+
+int nftw_single(const char *, int (*fn) (const char *, const struct stat *, int, void *), int, int);
 
 }
 

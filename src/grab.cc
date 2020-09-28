@@ -45,11 +45,13 @@
 #include <ftw.h>
 #include <pcre.h>
 #include "grab.h"
+#include "nftw.h"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 #include <pthread.h>
+
 
 using namespace std;
 
@@ -252,7 +254,7 @@ int FileGrep::find(const string &path)
 }
 
 
-int walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwbuf)
+int walk(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
 {
 	if (typeflag == FTW_F) {
 		if (S_ISREG(st->st_mode)) {
@@ -267,7 +269,7 @@ int walk(const char *path, const struct stat *st, int typeflag, struct FTW *ftwb
 int FileGrep::find_recursive(const string &path)
 {
 	d_recursive = 1;
-	return nftw(path.c_str(), walk, 1024, FTW_PHYS);
+	return nftw_single(path.c_str(), walk, 1024, FTW_PHYS);
 }
 
 

@@ -42,7 +42,6 @@
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
-#include <ftw.h>
 #include <pcre.h>
 #include "grab.h"
 #include "nftw.h"
@@ -93,7 +92,7 @@ void *find_iterative(void *vp)
 	pthread_mutex_lock(&start_lck);
 	pthread_mutex_unlock(&start_lck);
 
-	while (t_nftw(ta->path.c_str(), thread_grep_once, 1024, FTW_PHYS) == 1)
+	while (nftw_multi(ta->path.c_str(), thread_grep_once, 1024, FTW_PHYS) == 1)
 		;
 
 	return nullptr;
