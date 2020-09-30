@@ -20,6 +20,8 @@ Options:
            the first match in the line counts)
  -s     -- single match; dont search file further after first match
            (similar to grep on a binary)
+ -H     -- use hyerscan lib for scanning (see build instructions)
+ -S     -- only for hyperscan: interpret pattern as string literal instead of regex
  -L     -- machine has low mem; half chunk-size (default 1GB)
            may be used multiple times
  -I     -- enable highlighting of matches (useful)
@@ -43,17 +45,52 @@ There are two branches. `master` and `greppin`. Master is the 'traditional'
 *grab* that should compile and run on most POSIX systems. `greppin` comes with
 its own optimized and parallelized version of `nftw()` and `readdir()`, which
 again doubles speed on the top of speedup that the `master` branch already
-provides. However, the `greppin` branch only runs on Linux.
+provides. However, the `greppin` branch only runs on Linux. The `greppin`
+branch also comes with support for Intel's [hyperscan](https://hyperscan.io)
+libraries that try to exploit CPU's SIMD instructions if possible (AVX2, AVX512 etc.)
+when compiling the regex pattern into JIT code.
+
+So, while non-Linux builds are possible, it requires some fiddling with the `Makefile`
+and the results are far behind whats possible from performance side. When you are
+on Linux, you will most likely want to build the `greppin` branch:
 
 ```
+$ git checkout greppin
+[...]
+$ cd src; make
+[...]
+```
+
+If you want to do cutting edge tech with _greppin's_ multiple regex engine and hyperscan
+support, you first need to get and build that:
+
+```
+$ git clone https://github.com/intel/hyperscan
+[...]
+$ cd hyperscan
+$ mkdir build; cd build
+$ cmake -DFAT_RUNTIME=1 -DBUILD_STATIC_AND_SHARED=1 ..
+[...]
 $ make
+[...]
 ```
 
-or
+This will build so called *fat runtime* of the hyperscan libs which contain support
+for all CPU families in order to select the right compilation pattern at runtime
+for most performance. Once the build finishes, you build _greppin_ against that:
 
+(inside grab cloned repo)
 ```
-$ git checkout greppin; make clean; make
+$ cd src
+$ HYPERSCAN_BUILD=/path/to/hyperscan/build make -f Makefile.hs
+[...]
 ```
+
+This will produce a `greppin` binary that enables the `-H` option to load
+a different engine at runtime, trying to exploit all possible performance bits.
+
+You could link it against already installed libs, but the API just recently
+added some functions in the 5.x version and most distros ship with 4.x.
 
 
 Why is it faster?
@@ -182,70 +219,39 @@ If the load is equal among the single-core tests, _grab_ will see a speedup if
 searching on large file trees. On multi-core setups, _grab_ can benefit ofcorse.
 
 
-What about ripgrep?
--------------------
+ripgrep comparison
+------------------
 
-I was asked several times how _grab_ would compare against [ripgrep](https://github.com/BurntSushi/ripgrep)
-so I downloaded their official build `ripgrep-12.1.1-x86_64-unknown-linux-musl.tar.gz`
-and run it on the same 4-core SSD machine as in the above tests. _ripgrep_ has
-by far more options and compares much better to the traditional _grep_ than _grab_
-does. Its written in **Rust** and is also using a parallelized directory iterator
-(as I learned from their README). Still, _greppin_ is __faster by a factor of 3__.
-Since _ripgrep_ will ignore lot of files (for good reason) when running against
-a git repo, I also run it against `/usr`. It can be seen that _greppin_
-is still faster, and 'equally fast' when scanning the _entire git repo_ (printing
-16918 matches vs. 247) versus _ripgrep_ with skipping a lot of files in between.
-Between the runs, the `echo 3 > /proc/sys/vm/drop_caches` has been made in order
-to minimize caching effects. Also note that due to JIT engines inside most regex
-implementations, memory `rwx` mappings have to be allowed for maximum performance.
-On grsec for example, you would need to
+I recently learned about this project via twitter when I was asked for performance
+comparisons. The project can be found [here](https://github.com/BurntSushi/ripgrep).
+I tested their official build `ripgrep-12.1.1-x86_64-unknown-linux-musl.tar.gz`
+and run it on the same 4-core SSD machine as in the above tests. The net result is:
+both runs have about the same speed with a tendency of _greppin_ being a few percent faster
+when _ripgrep_ is invoked with `-P`. _ripgrep_ with `-e` is a few percent faster
+than _greppin_ with `-H`.
+ITW, it actually also depends on the directory tree layout since my `nftw()`
+implementation takes care to distribute load across cores even on unbalanced directory trees
+at the price of locking. _ripgrep_ claims to use a lockfree parallel directory iterator
+written in Rust. I see small speedup of _ripgrep_ when scanning `/usr` but I see
+the same amount of speedup (just few %) in _greppin_ when scanning my Linux source
+trees.
 
-```
-setfattr -n user.pax.flags -v "m" /path/to/rg
-```
+The main speedup thats inside their benchmark tables stems from the fact that _ripgrep_
+ignores a lot of files when invoked without special options as well as treating
+binary files as a single-match target (similar to _grep_). In order to have
+comparable results, keep in mind to (4 is the number of cores):
 
-Since I was using an untrusted binary download, I didnt run the tests as root
-this time, which is perfectly OK. Above tests were run as root for the vm-dropping
-shortcut without the need to setup sudo rules. It requires redirecting `stderr` to
-`/dev/zero` though, in order to eliminate junk output:
+* `echo 3 > /proc/sys/vm/drop_caches` between each run
+* Add `-j 4 -a --no-unicode --no-pcre2-unicode -uuu --mmap` to _ripgrep_, since
+  it will by default match Unicode which is 3 times slower, and tries to compensate
+  the speedloss by skipping 'ignore'-based files. `-e` is faster than `-P`,
+  so better choose `-e`, but thats not as powerful as a PCRE
+* pipe the output to `wc -l` to check whether the amount of match reports is equal
+  and no files were missing in the scan
+* add `-H -n 4` to _greppin_ if you want best performance. `-H` is PCRE compatible
+  with only very few exceptions (according to hyperscan docu)
+* `setfattr -n user.pax.flags -v "m" /path/to/binary` if you run on grsec systems
+  and require rwx JIT mappings
 
-```
-source@linux:~$ time rg -a -P linus /source/linux|wc -l
-247
-
-real    0m7.123s
-user    0m8.092s
-sys     0m3.284s
-source@linux:~$ time greppin -n 4 -r linus /source/linux|wc -l
-16918
-
-real    0m8.756s
-user    0m4.319s
-sys     0m5.454s
-source@lnux:~$ time rg -a -P linus /usr 2>/dev/zero|wc -l
-192
-
-real    0m51.108s
-user    2m23.315s
-sys     0m10.981s
-source@linux:~$ time rg -j 4 -a -P linus /usr 2>/dev/zero|wc -l
-192
-
-real    0m48.952s
-user    2m15.765s
-sys     0m10.679s
-
-source@linux:~$ time greppin -n 4 -r linus /usr 2>/dev/zero|wc -l
-192
-
-real    0m17.476s
-user    0m7.445s
-sys     0m10.202s
-source@linux:~$
-```
-
-When using non-Perl regexes in _ripgrep_ such as with `-a -N -e linus` both runs are
-equally fast, but thats an odd comparison, since PCRE's are much more powerful and
-potentially slower to match than basic regular expressions.
-
+Then just go ahead and check the timings! :)
 
