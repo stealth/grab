@@ -55,6 +55,9 @@
 using namespace std;
 
 
+extern uint32_t min_file_size;
+
+
 namespace grab {
 
 
@@ -76,8 +79,9 @@ struct dirent {
 	ino_t d_ino;
 	off_t d_off;
 	unsigned short d_reclen;
-	char d_name[256];
+	char d_name[1024];
 };
+
 
 // all the directory handles currently handled at this depth
 // So to say, this is our recursion stack, since nftw_once()
@@ -94,7 +98,7 @@ static atomic<int> finished{0}, inflight{0}, initial{1};
 static pthread_mutex_t lck = PTHREAD_MUTEX_INITIALIZER;
 
 
-static DIR *opendir(const char *path)
+static inline DIR *opendir(const char *path)
 {
 	DIR *dp = new (nothrow) DIR;
 	if (!dp)
@@ -111,14 +115,14 @@ static DIR *opendir(const char *path)
 }
 
 
-static dirent *readdir(DIR *dp)
+static inline dirent *readdir(DIR *dp)
 {
 	dirent *de = nullptr;
 	ssize_t n = 0;
 
 	do {
 		if (dp->offset >= dp->size) {
-			if ((n = syscall(SYS_getdents, dp->fd, dp->data, sizeof(dp->data))) <= 0) {
+			if ((n = syscall(SYS_getdents, dp->fd, dp->data, sizeof(dp->data)) - 1) <= 0) {
 				de = nullptr;
 				break;
 			}
@@ -135,7 +139,7 @@ static dirent *readdir(DIR *dp)
 }
 
 
-static int closedir(DIR *dp)
+static inline int closedir(DIR *dp)
 {
 	if (dp->fd >= 0) {
 		close(dp->fd);
@@ -148,10 +152,12 @@ static int closedir(DIR *dp)
 
 static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed)
 {
+	char fullp[1024] = {0};
 	DIR *dfd = nullptr;
-	string pathname = "";
+	const char *dirname = nullptr;
 	struct dirent *de = nullptr;
 	struct stat lst;
+
 
 	// retval: 0 -> end of entries, 1 -> can be called once more
 
@@ -189,7 +195,7 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 			return 1;
 		}
 		if (dirvec.empty())
-			dirvec.reserve(1024);
+			dirvec.reserve(1024*1024);
 
 		if ((dfd = opendir(dir)) == nullptr) {
 			--inflight;
@@ -203,10 +209,10 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		// and do not erase() map elements when we remove it from dirvec, we would end up with
 		// wrong mappings
 		dirmap[dfd] = dir;
-		pathname = dir;
+		dirname = dir;
 	} else {
 		dfd = dirvec.back();
-		pathname = dirmap[dfd];
+		dirname = dirmap[dfd].c_str();
 	}
 
 	// No longer uninited; we filled dirvec at least once at this point
@@ -233,23 +239,20 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		string d_name = de->d_name;
+		// double slashes in pathnames do not matter (in case initial dir had repended /)
+		snprintf(fullp, sizeof(fullp), "%s/%s", dirname, de->d_name);
 
 		pthread_mutex_unlock(&lck);
 
-		string p = pathname;
-		if (p[p.size() - 1] != '/')
-			p += "/";
-		p += d_name;
-
-		if (lstat(p.c_str(), &lst) < 0)
+		if (lstat(fullp, &lst) < 0)
 			break;
 
 		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
-			nftw_once(p.c_str(), fn, 1);
+			nftw_once(fullp, fn, 1);
 		} else if (S_ISREG(lst.st_mode)) {
-			fn(p.c_str(), &lst, FTW_F, nullptr);
+			if (!min_file_size || lst.st_size >= min_file_size)
+				fn(fullp, &lst, FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
 
@@ -271,6 +274,7 @@ int nftw_multi(const char *dir, int (*fn) (const char *fpath, const struct stat 
 // Single threaded version, no locking required. nopenfd is ignored
 int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
+	char fullp[1024] = {0};
 	DIR *dfd = nullptr;
 	struct dirent *de = nullptr;
 	struct stat lst;
@@ -288,19 +292,17 @@ int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		string p = dir;
-		if (p[p.size() - 1] != '/')
-			p += "/";
-		p += de->d_name;
+		snprintf(fullp, sizeof(fullp), "%s/%s", dir, de->d_name);
 
-		if (lstat(p.c_str(), &lst) < 0)
+		if (lstat(fullp, &lst) < 0)
 			continue;
 
 		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
-			nftw_single(p.c_str(), fn, nopenfd, flags);
+			nftw_single(fullp, fn, nopenfd, flags);
 		} else if (S_ISREG(lst.st_mode)) {
-			fn(p.c_str(), &lst, FTW_F, nullptr);
+			if (!min_file_size || lst.st_size >= min_file_size)
+				fn(fullp, &lst, FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
 
@@ -308,7 +310,6 @@ int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat
 
 	return 0;
 }
-
 
 
 }

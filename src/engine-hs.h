@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2020 Sebastian Krahmer.
+ * Copyright (C) 2020 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,63 +30,38 @@
  * SUCH DAMAGE.
  */
 
-#ifndef grab_h
-#define grab_h
+
+#ifndef engine_hs_h
+#define engine_hs_h
 
 #include <stdint.h>
-#include <string>
+#include <string.h>
+#include <map>
+#include <hs.h>
 #include "engine.h"
-
 
 namespace grab {
 
-class FileGrep {
+class hs_engine : public virtual re_engine {
 
-	std::string d_err{""};
-	static std::string start_inv, stop_inv;
+	hs_database_t *d_db{nullptr};
+	hs_scratch_t *d_scratch{nullptr};
+	hs_stream_t *d_stream{nullptr};
 
-	uint32_t d_minlen{1};
-	bool d_print_line{1}, d_print_offset{0}, d_recursive{0}, d_colored{0}, d_print_path{0},
-	     d_single_match{0}, d_low_mem{0};
-
-	size_t d_chunk_size{1<<30};
-
-	uid_t d_my_uid{0};
-
-	re_engine *d_engine{nullptr};
+	bool d_literal{0};
 
 public:
 
-	FileGrep();
+	hs_engine();
 
-	~FileGrep();
+	virtual ~hs_engine();
 
-	const char *why()
-	{
-		if (!d_engine || !d_err.empty())
-			return d_err.c_str();
-		return d_engine->why();
-	}
+	virtual int prepare(const std::map<std::string, size_t> &) override;
 
-	void recurse()
-	{
-		d_recursive = 1;
-	}
+	virtual int compile(const std::string &, uint32_t &) override;
 
-	void show_path(bool b)
-	{
-		d_print_path = b;
-	}
+	virtual int match(const void *, uint64_t, int ovector[3]) override;
 
-	int compile(const std::string &, uint32_t &);
-
-	int config(const std::map<std::string, size_t> &);
-
-	int find(const std::string &);
-
-	int find(const char *path, const struct stat *st, int typeflag);
-
-	int find_recursive(const std::string &);
 };
 
 }

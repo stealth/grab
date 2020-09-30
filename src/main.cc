@@ -42,7 +42,6 @@
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
-#include <pcre.h>
 #include "grab.h"
 #include "nftw.h"
 
@@ -58,6 +57,8 @@ using namespace grab;
 
 FileGrep *grep = nullptr;
 
+uint32_t min_file_size = 0;
+
 thread_local FileGrep *tgrep = nullptr;
 
 pthread_mutex_t start_lck = PTHREAD_MUTEX_INITIALIZER;
@@ -71,15 +72,10 @@ struct thread_arg {
 
 int thread_grep_once(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
 {
-	if (typeflag == FTW_F) {
-		if (S_ISREG(st->st_mode))
-			return tgrep->find(path, st, FTW_F);
-	}
-	return 0;
+	// since we use our own dedicated nftw() impl, only typeglag == FTW_F
+	// and S_ISREG() files will reach us, so we do not need to check again
+	return tgrep->find(path, st, FTW_F);
 }
-
-
-
 
 
 void *find_iterative(void *vp)
@@ -88,9 +84,6 @@ void *find_iterative(void *vp)
 
 	// thread_local
 	tgrep = ta->grep;
-
-	pthread_mutex_lock(&start_lck);
-	pthread_mutex_unlock(&start_lck);
 
 	while (nftw_multi(ta->path.c_str(), thread_grep_once, 1024, FTW_PHYS) == 1)
 		;
@@ -101,7 +94,7 @@ void *find_iterative(void *vp)
 
 void usage(const string &p)
 {
-	cout<<"Usage: "<<p<<" [-rR] [-I] [-O] [-L] [-l] [-s] [-n <cores>] <regex> <path>\n";
+	cout<<"Usage: "<<p<<" [-rRIOLlsSH] [-n <cores>] <regex> <path>\n";
 	exit(1);
 }
 
@@ -112,7 +105,7 @@ int main(int argc, char **argv)
 	map<string, size_t> config;
 	size_t chunk_size = 1<<30;
 
-	while ((c = getopt(argc, argv, "Rrn:IOlsL")) != -1) {
+	while ((c = getopt(argc, argv, "Rrn:IOlsSLH")) != -1) {
 		switch (c) {
 		case 'r':
 		case 'R':
@@ -140,6 +133,12 @@ int main(int argc, char **argv)
 		case 'n':
 			config["cores"] = atoi(optarg);
 			break;
+		case  'H':
+			config["hyperscan"] = 1;
+			break;
+		case 'S':
+			config["literal"] = 1;
+			break;
 		default:
 			usage(argv[0]);
 		}
@@ -156,6 +155,8 @@ int main(int argc, char **argv)
 	path = argv[optind++];
 
 	int cores = config["cores"];
+	uint32_t re_min_size = 0xffffffff;
+
 	if (cores > 1) {
 
 		if (config.count("recursive") == 0) {
@@ -178,9 +179,22 @@ int main(int argc, char **argv)
 
 		for (int i = 0; i < cores; ++i) {
 			tgrep = new (nothrow) FileGrep;
-			tgrep->config(config);
-			tgrep->prepare(regex);
+			if (tgrep->config(config) < 0) {
+				cerr<<tgrep->why()<<endl;
+				exit(1);
+			}
 			tgrep->recurse();
+			if (tgrep->compile(regex, re_min_size) < 0) {
+				cerr<<tgrep->why()<<endl;
+				exit(1);
+			}
+
+			// set global variable for our nftw() impls to early
+			// ignore too small files instead of returning up the callstack
+			// into a handler and then returning because of too small size
+			// We are not threaded yet, so this doesn't need locking
+			min_file_size = re_min_size;
+
 			ta[i].grep = tgrep;
 			ta[i].idx = i;
 			ta[i].nthreads = cores;
@@ -188,10 +202,6 @@ int main(int argc, char **argv)
 		}
 
 		int r = 0;
-
-		// Avoid head start of the first thread. Thats also why above and below loops
-		// are split, even though they could be merged.
-		pthread_mutex_lock(&start_lck);
 
 		for (int i = 0; i < cores; ++i) {
 			CPU_ZERO(&cpuset);
@@ -207,9 +217,6 @@ int main(int argc, char **argv)
 				exit(-1);
 			}
 		}
-
-		// Go, go, go ...
-		pthread_mutex_unlock(&start_lck);
 
 		for (int i = 0; i < cores; ++i) {
 			pthread_join(tids[i], nullptr);
@@ -228,9 +235,12 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	grep->config(config);
+	if (grep->config(config) < 0) {
+		cerr<<grep->why()<<endl;
+		return -1;
+	}
 
-	if (grep->prepare(regex) < 0) {
+	if (grep->compile(regex, min_file_size) < 0) {
 		cerr<<grep->why()<<endl;
 		return -1;
 	}

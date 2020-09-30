@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2020 Sebastian Krahmer.
+ * Copyright (C) 2020 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,66 +30,72 @@
  * SUCH DAMAGE.
  */
 
-#ifndef grab_h
-#define grab_h
 
-#include <stdint.h>
 #include <string>
-#include "engine.h"
+#include <map>
+#include <pcre.h>
+#include "engine-pcre.h"
+
+
+using namespace std;
 
 
 namespace grab {
 
-class FileGrep {
 
-	std::string d_err{""};
-	static std::string start_inv, stop_inv;
-
-	uint32_t d_minlen{1};
-	bool d_print_line{1}, d_print_offset{0}, d_recursive{0}, d_colored{0}, d_print_path{0},
-	     d_single_match{0}, d_low_mem{0};
-
-	size_t d_chunk_size{1<<30};
-
-	uid_t d_my_uid{0};
-
-	re_engine *d_engine{nullptr};
-
-public:
-
-	FileGrep();
-
-	~FileGrep();
-
-	const char *why()
-	{
-		if (!d_engine || !d_err.empty())
-			return d_err.c_str();
-		return d_engine->why();
-	}
-
-	void recurse()
-	{
-		d_recursive = 1;
-	}
-
-	void show_path(bool b)
-	{
-		d_print_path = b;
-	}
-
-	int compile(const std::string &, uint32_t &);
-
-	int config(const std::map<std::string, size_t> &);
-
-	int find(const std::string &);
-
-	int find(const char *path, const struct stat *st, int typeflag);
-
-	int find_recursive(const std::string &);
-};
-
+pcre_engine::pcre_engine()
+{
 }
 
+
+pcre_engine::~pcre_engine()
+{
+	if (d_extra)
+		pcre_free_study(d_extra);
+}
+
+
+int pcre_engine::prepare(const map<string, size_t> &conf)
+{
+	if (conf.count("literal") > 0) {
+		d_err = "pcre_engine::prepare: No literal support in PCRE engine.";
+		return -1;
+	}
+	return 0;
+}
+
+
+int pcre_engine::compile(const string &regex, uint32_t &min)
+{
+	const char *errptr = nullptr;
+	int erroff = 0;
+
+	if ((d_pcreh = pcre_compile(regex.c_str(), 0, &errptr, &erroff, pcre_maketables())) == nullptr) {
+		d_err = "pcre_engine::prepare::pcre_compile error";
+		return -1;
+	}
+
+#ifndef PCRE_STUDY_JIT_COMPILE
+#define PCRE_STUDY_JIT_COMPILE 0
 #endif
+
+	if ((d_extra = pcre_study(d_pcreh, PCRE_STUDY_JIT_COMPILE, &errptr)) == nullptr) {
+		d_err = "pcre_engine::prepare::pcre_study error" ;
+		return -1;
+	}
+
+	pcre_fullinfo(d_pcreh, d_extra, PCRE_INFO_MINLENGTH, &d_minlen);
+
+	min = d_minlen;
+
+	return 0;
+}
+
+
+int pcre_engine::match(const void *start, uint64_t len, int ovector[3])
+{
+	return pcre_exec(d_pcreh, d_extra, reinterpret_cast<const char *>(start), len, 0, 0, ovector, 3);
+}
+
+}
 

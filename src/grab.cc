@@ -42,10 +42,14 @@
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include <ftw.h>
-#include <pcre.h>
 #include "grab.h"
 #include "nftw.h"
+#include "engine.h"
+#include "engine-pcre.h"
+
+#ifdef WITH_HYPERSCAN
+#include "engine-hs.h"
+#endif
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -77,12 +81,11 @@ FileGrep::FileGrep()
 
 FileGrep::~FileGrep()
 {
-	if (d_extra)
-		pcre_free_study(d_extra);
+	delete d_engine;
 }
 
 
-void FileGrep::config(const map<string, size_t> &config)
+int FileGrep::config(const map<string, size_t> &config)
 {
 	if (config.count("color") > 0)
 		d_colored = 1;
@@ -97,31 +100,26 @@ void FileGrep::config(const map<string, size_t> &config)
 	auto it = config.find("chunk_size");
 	if (it != config.end())
 		d_chunk_size = it->second;
+
+	if (config.count("hyperscan") > 0) {
+#ifdef WITH_HYPERSCAN
+		d_engine = new (nothrow) hs_engine;
+#else
+		d_err = "No hyperscan support built in. Use Makefile.hs for building.\n";
+		return -1;
+#endif
+	} else
+		d_engine = new (nothrow) pcre_engine;
+
+	return d_engine->prepare(config);
 }
 
 
-int FileGrep::prepare(const string &regex)
+int FileGrep::compile(const string &regex, uint32_t &min_size)
 {
-	const char *errptr = nullptr;
-	int erroff = 0;
-
-	if ((d_pcreh = pcre_compile(regex.c_str(), 0, &errptr, &erroff, pcre_maketables())) == nullptr) {
-		d_err = "FileGrep::prepare::pcre_compile error";
-		return -1;
-	}
-
-#ifndef PCRE_STUDY_JIT_COMPILE
-#define PCRE_STUDY_JIT_COMPILE 0
-#endif
-
-	if ((d_extra = pcre_study(d_pcreh, PCRE_STUDY_JIT_COMPILE, &errptr)) == nullptr) {
-		d_err = "FileGrep::prepare::pcre_study error" ;
-		return -1;
-	}
-
-	pcre_fullinfo(d_pcreh, d_extra, PCRE_INFO_MINLENGTH, &d_minlen);
-
-	return 0;
+	int r = d_engine->compile(regex, d_minlen);
+	min_size = d_minlen;
+	return r;
 }
 
 
@@ -133,8 +131,10 @@ enum {
 int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 {
 	size_t clen = st->st_size;
-	if ((size_t)d_minlen > clen)
-		return 0;
+
+	// Not needed here anymore due to min_file_size global
+	//if ((size_t)d_minlen > clen)
+	//	return 0;
 
 	int fd = -1, flags = O_RDONLY|O_NOCTTY;
 
@@ -150,8 +150,14 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 	}
 
 	char *content = nullptr;
-	const int overlap = 0x1000;
+	const int overlap = 0x1000;	//d_engine->overlap();
 	ostringstream str;
+
+	char before[512] = {0}, after[512] = {0};
+	int ovector[3] = {0}, rc = -1;
+
+	// no impls yet
+	//d_engine->pre_match();
 
 	for (off_t off = 0; off < st->st_size; off += (d_chunk_size - overlap)) {
 
@@ -170,15 +176,11 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		if (clen > 4*0x1000 && !d_single_match)
 			posix_madvise(content, clen, POSIX_MADV_SEQUENTIAL);
 
-		int ovector[3] = {-1}, rc = 0;
 		const char *start = content, *end = content + clen;
-		char before[512] = {0}, after[512] = {0};
 
 		for (;start + d_minlen < end;) {
 
-			memset(ovector, 0, sizeof(ovector));
-			rc = pcre_exec(d_pcreh, d_extra, start, end - start, 0, 0, ovector, 3);
-			if (rc <= 0)
+			if ((rc = d_engine->match(start, end - start, ovector)) <= 0)
 				break;
 
 			if (d_recursive || d_print_path)
@@ -231,6 +233,8 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		}
 	}
 
+	//d_engine->post_match();
+
 	close(fd);
 	return 0;
 }
@@ -256,12 +260,10 @@ int FileGrep::find(const string &path)
 
 int walk(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
 {
-	if (typeflag == FTW_F) {
-		if (S_ISREG(st->st_mode)) {
-			if (grep->find(path, st, typeflag) < 0)
-				cerr<<path<<": "<<grep->why()<<endl;
-		}
-	}
+	// Since we use our own dedicated nftw() impl, only FTW_F and S_ISREG()
+	// files will reach this callback, so no need to check again for it
+	if (grep->find(path, st, typeflag) < 0)
+		cerr<<path<<": "<<grep->why()<<endl;
 	return 0;
 }
 
