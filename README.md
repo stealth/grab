@@ -46,7 +46,7 @@ There are two branches. `master` and `greppin`. Master is the 'traditional'
 its own optimized and parallelized version of `nftw()` and `readdir()`, which
 again doubles speed on the top of speedup that the `master` branch already
 provides. However, the `greppin` branch only runs on Linux. The `greppin`
-branch also comes with support for Intel's [hyperscan](https://hyperscan.io)
+branch also comes with support for Intel's [hyperscan](https://www.hyperscan.io)
 libraries that try to exploit CPU's SIMD instructions if possible (AVX2, AVX512 etc.)
 when compiling the regex pattern into JIT code.
 
