@@ -31,6 +31,7 @@
  */
 
 #include <string>
+#include <list>
 #include <map>
 #include <hs.h>
 #include "engine-hs.h"
@@ -49,8 +50,6 @@ hs_engine::hs_engine()
 
 hs_engine::~hs_engine()
 {
-	if (d_stream)
-		hs_close_stream(d_stream, d_scratch, nullptr, nullptr);
 	if (d_scratch)
 		hs_free_scratch(d_scratch);
 	if (d_db)
@@ -119,6 +118,7 @@ int hs_engine::compile(const string &regex, uint32_t &min)
 
 thread_local static bool haz_match = 0;
 
+
 // odd hyperscan API: hs_scan() takes "unsigned int" as len param for the data, but returns
 // "unsigned long long" as matching offsets??
 static int hs_cb(unsigned int id, unsigned long long from, unsigned long long to, unsigned int flags, void *ctx)
@@ -129,20 +129,18 @@ static int hs_cb(unsigned int id, unsigned long long from, unsigned long long to
 	ovec[1] = static_cast<int>(to);
 	haz_match = 1;
 
-	// indicates return by has_scan(), so grep loop can show info and continue
+	// 1 indicates "return from scanning"
 	return 1;
 }
 
 
-int hs_engine::match(const void *start, uint64_t len, int ovector[3])
+int hs_engine::match(const char *block_start, const char *match_start, uint64_t len, int ovector[3])
 {
-
 	haz_match = 0;
-	void *ctx = reinterpret_cast<void *>(ovector);
-	hs_scan(d_db, reinterpret_cast<const char *>(start), static_cast<unsigned int>(len), 0, d_scratch, hs_cb, ctx);
-
+	hs_scan(d_db, match_start, static_cast<unsigned int>(len), 0, d_scratch, hs_cb, ovector);
 	return haz_match;
 }
+
 
 }
 

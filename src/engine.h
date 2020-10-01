@@ -71,7 +71,7 @@ public:
 		return 0;
 	}
 
-	virtual int match(const void *, uint64_t, int ovector[3]) = 0;
+	virtual int match(const char *, const char *, uint64_t, int ovector[3]) = 0;
 
 	virtual int overlap()
 	{

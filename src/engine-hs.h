@@ -46,7 +46,6 @@ class hs_engine : public virtual re_engine {
 
 	hs_database_t *d_db{nullptr};
 	hs_scratch_t *d_scratch{nullptr};
-	hs_stream_t *d_stream{nullptr};
 
 	bool d_literal{0};
 
@@ -60,7 +59,7 @@ public:
 
 	virtual int compile(const std::string &, uint32_t &) override;
 
-	virtual int match(const void *, uint64_t, int ovector[3]) override;
+	virtual int match(const char *, const char *, uint64_t, int ovector[3]) override;
 
 };
 

@@ -92,9 +92,9 @@ int pcre_engine::compile(const string &regex, uint32_t &min)
 }
 
 
-int pcre_engine::match(const void *start, uint64_t len, int ovector[3])
+int pcre_engine::match(const char *start, const char *match_start, uint64_t len, int ovector[3])
 {
-	return pcre_exec(d_pcreh, d_extra, reinterpret_cast<const char *>(start), len, 0, 0, ovector, 3);
+	return pcre_exec(d_pcreh, d_extra, match_start, len, 0, 0, ovector, 3);
 }
 
 }

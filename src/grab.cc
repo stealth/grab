@@ -180,7 +180,7 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 
 		for (;start + d_minlen < end;) {
 
-			if ((rc = d_engine->match(start, end - start, ovector)) <= 0)
+			if ((rc = d_engine->match(content, start, end - start, ovector)) <= 0)
 				break;
 
 			if (d_recursive || d_print_path)

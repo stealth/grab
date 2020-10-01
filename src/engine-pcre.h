@@ -57,7 +57,7 @@ public:
 
 	virtual int compile(const std::string &, uint32_t &) override;
 
-	virtual int match(const void *, uint64_t, int ovector[3]) override;
+	virtual int match(const char *, const char *, uint64_t, int ovector[3]) override;
 };
 
 }
