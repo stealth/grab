@@ -60,13 +60,23 @@ struct dirent {
 	char d_name[1024 + 1];
 };
 
-#elif (defined __OpenBSD__ || defined __NetBSD__)
+#elif defined __OpenBSD__
 
 struct dirent {
-	uint32_t d_ino;			// d_fileno
+	ino_t d_ino;			// d_fileno
 	off_t d_off;
 	uint16_t d_reclen;
 	uint8_t d_type, d_namelen;
+	char d_name[1024 + 1];
+};
+
+
+#elif defined __NetBSD__
+
+struct dirent {
+	ino_t d_ino;			// d_fileno
+	uint16_t d_reclen, d_namelen;
+	uint8_t d_type;
 	char d_name[1024 + 1];
 };
 
