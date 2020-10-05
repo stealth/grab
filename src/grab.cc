@@ -250,7 +250,7 @@ int FileGrep::find(const string &path)
 	int r = 0;
 
 	if (S_ISREG(st.st_mode))
-		r = find(path.c_str(), &st, FTW_F);
+		r = find(path.c_str(), &st, G_FTW_F);
 	else if (S_ISDIR(st.st_mode))
 		cerr<<"Clever boy! Want recursion? Add -R!\n";
 
@@ -271,7 +271,7 @@ int walk(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
 int FileGrep::find_recursive(const string &path)
 {
 	d_recursive = 1;
-	return nftw_single(path.c_str(), walk, 1024, FTW_PHYS);
+	return nftw_single(path.c_str(), walk, 1024, G_FTW_PHYS);
 }
 
 

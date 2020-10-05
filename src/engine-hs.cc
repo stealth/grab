@@ -116,7 +116,11 @@ int hs_engine::compile(const string &regex, uint32_t &min)
 }
 
 
+#ifdef __APPLE__
+__thread static bool haz_match = 0;
+#else
 thread_local static bool haz_match = 0;
+#endif
 
 
 // odd hyperscan API: hs_scan() takes "unsigned int" as len param for the data, but returns

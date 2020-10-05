@@ -49,6 +49,10 @@
 #include <sys/syscall.h>
 #include <pthread.h>
 
+#ifdef __APPLE__
+#include <sys/dirent.h>
+#endif
+
 #include "nftw.h"
 
 
@@ -59,28 +63,6 @@ extern uint32_t min_file_size;
 
 
 namespace grab {
-
-
-// aligned to 64bit for ->data to be passed to
-// getdents' dirent struct
-struct DIR {
-	int32_t fd;
-	int32_t align;
-
-	uint64_t size;
-	uint64_t offset;
-
-	char data[0x10000 - 3*8];
-};
-
-// Removed d_type, so it matches linux_dirent struct and we
-// can pass it right away to getdents() syscall
-struct dirent {
-	ino_t d_ino;
-	off_t d_off;
-	unsigned short d_reclen;
-	char d_name[1024];
-};
 
 
 // all the directory handles currently handled at this depth
@@ -96,6 +78,19 @@ static map<DIR *, string> dirmap;
 static atomic<int> finished{0}, inflight{0}, initial{1};
 
 static pthread_mutex_t lck = PTHREAD_MUTEX_INITIALIZER;
+
+
+static int getdents(int fd, char *buf, int nbytes)
+{
+#ifdef __linux__
+	return syscall(SYS_getdents, fd, buf, nbytes);
+#elif (defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__)
+	return ::getdents(fd, buf, nybtes);
+#elif defined __APPLE__
+	long zero = 0;
+	return getdirentries(fd, buf, nbytes, &zero);
+#endif
+}
 
 
 static inline DIR *opendir(const char *path)
@@ -122,7 +117,7 @@ static inline dirent *readdir(DIR *dp)
 
 	do {
 		if (dp->offset >= dp->size) {
-			if ((n = syscall(SYS_getdents, dp->fd, dp->data, sizeof(dp->data)) - 1) <= 0) {
+			if ((n = getdents(dp->fd, dp->data, sizeof(dp->data)) - 1) <= 0) {
 				de = nullptr;
 				break;
 			}
@@ -252,7 +247,7 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 			nftw_once(fullp, fn, 1);
 		} else if (S_ISREG(lst.st_mode)) {
 			if (!min_file_size || lst.st_size >= min_file_size)
-				fn(fullp, &lst, FTW_F, nullptr);
+				fn(fullp, &lst, G_FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
 
@@ -302,7 +297,7 @@ int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat
 			nftw_single(fullp, fn, nopenfd, flags);
 		} else if (S_ISREG(lst.st_mode)) {
 			if (!min_file_size || lst.st_size >= min_file_size)
-				fn(fullp, &lst, FTW_F, nullptr);
+				fn(fullp, &lst, G_FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
 

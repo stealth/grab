@@ -59,7 +59,11 @@ FileGrep *grep = nullptr;
 
 uint32_t min_file_size = 0;
 
+#ifdef __APPLE__
+__thread FileGrep *tgrep = nullptr;
+#else
 thread_local FileGrep *tgrep = nullptr;
+#endif
 
 pthread_mutex_t start_lck = PTHREAD_MUTEX_INITIALIZER;
 
@@ -74,7 +78,7 @@ int thread_grep_once(const char *path, const struct stat *st, int typeflag, void
 {
 	// since we use our own dedicated nftw() impl, only typeglag == FTW_F
 	// and S_ISREG() files will reach us, so we do not need to check again
-	return tgrep->find(path, st, FTW_F);
+	return tgrep->find(path, st, G_FTW_F);
 }
 
 
@@ -85,7 +89,7 @@ void *find_iterative(void *vp)
 	// thread_local
 	tgrep = ta->grep;
 
-	while (nftw_multi(ta->path.c_str(), thread_grep_once, 1024, FTW_PHYS) == 1)
+	while (nftw_multi(ta->path.c_str(), thread_grep_once, 1024, G_FTW_PHYS) == 1)
 		;
 
 	return nullptr;
@@ -168,7 +172,6 @@ int main(int argc, char **argv)
 		config["chunk_size"] = chunk_size;
 
 		FileGrep *tgrep = nullptr;
-		cpu_set_t cpuset;
 		thread_arg *ta = new (nothrow) thread_arg[cores];
 		pthread_t *tids = new (nothrow) pthread_t[cores];
 
@@ -204,18 +207,23 @@ int main(int argc, char **argv)
 		int r = 0;
 
 		for (int i = 0; i < cores; ++i) {
-			CPU_ZERO(&cpuset);
-			CPU_SET(i, &cpuset);
 
 			if ((r = pthread_create(tids + i, nullptr, find_iterative, ta + i)) != 0) {
 				cerr<<"pthread_create: "<<strerror(r)<<endl;
 				exit(-1);
 			}
+
+#ifdef __linux__
+			cpu_set_t cpuset;
+			CPU_ZERO(&cpuset);
+			CPU_SET(i, &cpuset);
+
 			if ((r = pthread_setaffinity_np(tids[i], sizeof(cpuset), &cpuset)) != 0) {
 				cerr<<"pthread_setaffinity_np:"<<strerror(r)
 				    <<" (more threads than cores?)"<<endl;
 				exit(-1);
 			}
+#endif
 		}
 
 		for (int i = 0; i < cores; ++i) {

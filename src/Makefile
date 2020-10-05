@@ -13,11 +13,11 @@ INC=-I/usr/local/include
 LIBS=-L/usr/local/lib
 LIBS+=-lpcre
 
-# For OSX (Darwin), just disable the parallel build, as
-# it has no cpu_set_t
-
-DEFS=
+ifeq ($(shell uname), Darwin)
+DEFS=-D_DARWIN_NO_64_BIT_INODE
+else
 LIBS+=-pthread
+endif
 
 all: greppin
 
