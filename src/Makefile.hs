@@ -23,7 +23,7 @@ endif
 
 
 ifeq ($(shell uname), Darwin)
-DEFS+=-D_DARWIN_NO_64_BIT_INODE
+DEFS+=
 else
 LIBS+=-pthread
 endif

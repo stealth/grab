@@ -75,6 +75,11 @@ static vector<DIR *> dirvec;
 // into nftw_once()
 static map<DIR *, string> dirmap;
 
+// OSX requires to save seek offsets across getdirentries() calls
+#ifdef __APPLE__
+static map<int, long> fd2seek;
+#endif
+
 static atomic<int> finished{0}, inflight{0}, initial{1};
 
 static pthread_mutex_t lck = PTHREAD_MUTEX_INITIALIZER;
@@ -84,11 +89,24 @@ static int getdents(int fd, char *buf, int nbytes)
 {
 #ifdef __linux__
 	return syscall(SYS_getdents, fd, buf, nbytes);
+
 #elif (defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__)
 	return ::getdents(fd, buf, nbytes);
+
 #elif defined __APPLE__
-	long zero = 0;
-	return getdirentries(fd, buf, nbytes, &zero);
+
+	// getdents() is called by readdir() which is called when lck
+	// is held, so access to this map is safe.
+	long seek = fd2seek[fd];
+
+#ifdef _DARWIN_FEATURE_64_BIT_INODE
+	int r = syscall(SYS_getdirentries64, fd, buf, nbytes, &seek);
+#else
+	int r = syscall(SYS_getdirentries, fd, buf, nbytes, &seek);
+#endif
+	fd2seek[fd] = seek;
+
+	return r;
 #endif
 }
 
@@ -105,6 +123,14 @@ static inline DIR *opendir(const char *path)
 		delete dp;
 		return nullptr;
 	}
+
+#ifdef __APPLE__
+
+	// Must use operator[] to overwrite potential existing seek offsets
+	// after a close()/open() cycle. Access to global map is safe, because
+	// caller of opendir() holds lck.
+	fd2seek[dp->fd] = 0;
+#endif
 
 	return dp;
 }
