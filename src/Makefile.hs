@@ -15,6 +15,13 @@ INC=-I/usr/local/include -I${HYPERSCAN_BUILD}/../src
 LFLAGS=-L/usr/local/lib -L${HYPERSCAN_BUILD}/lib -Wl,-rpath=${HYPERSCAN_BUILD}/lib
 LIBS+=-lpcre -lhs
 
+
+ifeq ($(shell uname), NetBSD)
+INC+=-I/usr/pkg/include
+LFLAGS+=-L/usr/pkg/lib
+endif
+
+
 ifeq ($(shell uname), Darwin)
 DEFS+=-D_DARWIN_NO_64_BIT_INODE
 else
