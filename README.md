@@ -45,14 +45,12 @@ There are two branches. `master` and `greppin`. Master is the 'traditional'
 *grab* that should compile and run on most POSIX systems. `greppin` comes with
 its own optimized and parallelized version of `nftw()` and `readdir()`, which
 again doubles speed on the top of speedup that the `master` branch already
-provides. However, the `greppin` branch only runs on Linux. The `greppin`
-branch also comes with support for Intel's [hyperscan](https://www.hyperscan.io)
-libraries that try to exploit CPU's SIMD instructions if possible (AVX2, AVX512 etc.)
-when compiling the regex pattern into JIT code.
+provides. The `greppin` branch runs on Linux, BSD and OSX. `greppin` also comes
+with support for Intel's [hyperscan](https://www.hyperscan.io) libraries that try
+to exploit CPU's SIMD instructions if possible (AVX2, AVX512 etc.) when compiling
+the regex pattern into JIT code.
 
-So, while non-Linux builds are possible, it requires some fiddling with the `Makefile`
-and the results are far behind whats possible from performance side. When you are
-on Linux, you will most likely want to build the `greppin` branch:
+You will most likely want to build the `greppin` branch:
 
 ```
 $ git checkout greppin
@@ -61,6 +59,7 @@ $ cd src; make
 [...]
 ```
 
+On BSD systems you need `gmake` instead of `make`.
 If you want to do cutting edge tech with _greppin's_ multiple regex engine and hyperscan
 support, you first need to get and build that:
 

@@ -124,7 +124,11 @@ int FileGrep::compile(const string &regex, uint32_t &min_size)
 
 
 enum {
+#if (defined __linux || defined __APPLE__)
 	mmap_flags = MAP_PRIVATE|MAP_NORESERVE
+#else
+	mmap_flags = MAP_PRIVATE
+#endif
 };
 
 

@@ -57,7 +57,7 @@ struct dirent {
 	uint32_t d_ino;			// d_fileno
 	uint16_t d_reclen;
 	uint8_t d_type, d_namelen;
-	char d_name[MAXNAMELEN + 1];
+	char d_name[1024 + 1];
 };
 
 #elif (defined __OpenBSD__ || defined __NetBSD__)
@@ -67,7 +67,7 @@ struct dirent {
 	off_t d_off;
 	uint16_t d_reclen;
 	uint8_t d_type, d_namelen;
-	char d_name[MAXNAMELEN + 1];
+	char d_name[1024 + 1];
 };
 
 

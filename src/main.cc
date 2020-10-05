@@ -98,7 +98,29 @@ void *find_iterative(void *vp)
 
 void usage(const string &p)
 {
-	cout<<"Usage: "<<p<<" [-rRIOLlsSH] [-n <cores>] <regex> <path>\n";
+	cout<<"\nParallel grep (C) Sebastian Krahmer -- https://github.com/stealth/grab\n\n"
+	    <<"Usage: "<<p<<" [-rRIOLlsSH] [-n <cores>] <regex> <path>\n\n"
+	    <<" -O     -- print file offset of match\n"
+	    <<" -l     -- do not print the matching line (Useful if you want\n"
+	    <<"           to see _all_ offsets; if you also print the line, only\n"
+	    <<"           the first match in the line counts)\n"
+	    <<" -s     -- single match; dont search file further after first match\n"
+	    <<"           (similar to grep on a binary)\n"
+#ifdef WITH_HYPERSCAN
+	    <<" -H     -- use hyerscan lib for scanning (see build instructions)\n"
+	    <<" -S     -- only for hyperscan: interpret pattern as string literal instead of regex\n"
+#else
+	    <<" -H -S  -- support not compiled in (hyperscan lib)\n"
+#endif
+	    <<" -L     -- machine has low mem; half chunk-size (default 1GB)\n"
+	    <<"           may be used multiple times\n"
+	    <<" -I     -- enable highlighting of matches (useful)\n"
+	    <<" -n <n> -- Use n cores in parallel (recommended for flash/SSD)\n"
+	    <<"           n <= 1 uses single-core\n"
+	    <<" -r     -- recurse on directory\n"
+	    <<" -R     -- same as -r\n\n";
+
+
 	exit(1);
 }
 

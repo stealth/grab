@@ -85,7 +85,7 @@ static int getdents(int fd, char *buf, int nbytes)
 #ifdef __linux__
 	return syscall(SYS_getdents, fd, buf, nbytes);
 #elif (defined __FreeBSD__ || defined __NetBSD__ || defined __OpenBSD__)
-	return ::getdents(fd, buf, nybtes);
+	return ::getdents(fd, buf, nbytes);
 #elif defined __APPLE__
 	long zero = 0;
 	return getdirentries(fd, buf, nbytes, &zero);

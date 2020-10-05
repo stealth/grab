@@ -13,7 +13,14 @@ CFLAGS=-c -Wall -O3 -pedantic -std=c++11
 INC=-I/usr/local/include -I${HYPERSCAN_BUILD}/../src
 
 LFLAGS=-L/usr/local/lib -L${HYPERSCAN_BUILD}/lib -Wl,-rpath=${HYPERSCAN_BUILD}/lib
-LIBS+=-lpcre -lpthread -lhs
+LIBS+=-lpcre -lhs
+
+ifeq ($(shell uname), Darwin)
+DEFS+=-D_DARWIN_NO_64_BIT_INODE
+else
+LIBS+=-pthread
+endif
+
 
 all: greppin
 
