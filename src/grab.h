@@ -49,7 +49,7 @@ class FileGrep {
 	bool d_print_line{1}, d_print_offset{0}, d_recursive{0}, d_colored{0}, d_print_path{0},
 	     d_single_match{0}, d_low_mem{0};
 
-	size_t d_chunk_size{1<<30};
+	size_t d_chunk_size{1UL<<31};
 
 	uid_t d_my_uid{0};
 

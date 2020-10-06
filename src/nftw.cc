@@ -35,8 +35,6 @@
 #include <map>
 #include <cstdio>
 #include <cstdint>
-#include <cstring>
-#include <ftw.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <atomic>
@@ -117,7 +115,10 @@ static inline DIR *opendir(const char *path)
 	if (!dp)
 		return nullptr;
 
-	memset(dp, 0, sizeof(DIR));
+	// no memset() of ->data necessary: ->data is filled
+	// by getdents() and the d_name[] array is guaranteed
+	// to be NUL-terminated by the syscall
+	dp->size = dp->offset = 0;
 
 	if ((dp->fd = open(path, O_RDONLY|O_DIRECTORY)) < 0) {
 		delete dp;
@@ -171,9 +172,20 @@ static inline int closedir(DIR *dp)
 }
 
 
+static inline void abs_path(char *dst, size_t dstlen, const char *dir, const char *basename)
+{
+	while (--dstlen > 2 && *dir)
+		*dst++ = *dir++;
+	*dst++ = '/'; --dstlen;
+	while (--dstlen > 2 && *basename)
+		*dst++ = *basename++;
+	*dst = 0;
+}
+
+
 static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed)
 {
-	char fullp[1024] = {0};
+	char fullp[4096] = {0};
 	DIR *dfd = nullptr;
 	const char *dirname = nullptr;
 	struct dirent *de = nullptr;
@@ -246,7 +258,7 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		if ((de = readdir(dfd)) == nullptr) {
 
 			// This is thhe only place where its allowed to remove DIRs from dirvec:
-			// All entries have been read. dfd if the last entry, so it can just be popped.
+			// All entries have been read. dfd is the last entry, so it can just be popped.
 			// This is since we continously locked dirvec and no other thread could
 			// have pushed or popped something in between.
 			dirvec.pop_back();
@@ -260,8 +272,8 @@ static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		// double slashes in pathnames do not matter (in case initial dir had repended /)
-		snprintf(fullp, sizeof(fullp), "%s/%s", dirname, de->d_name);
+		// double slashes in pathnames do not matter (in case initial dir had prepended /)
+		abs_path(fullp, sizeof(fullp), dirname, de->d_name);
 
 		pthread_mutex_unlock(&lck);
 
@@ -295,7 +307,7 @@ int nftw_multi(const char *dir, int (*fn) (const char *fpath, const struct stat 
 // Single threaded version, no locking required. nopenfd is ignored
 int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
-	char fullp[1024] = {0};
+	char fullp[4096] = {0};
 	DIR *dfd = nullptr;
 	struct dirent *de = nullptr;
 	struct stat lst;
@@ -313,7 +325,7 @@ int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		snprintf(fullp, sizeof(fullp), "%s/%s", dir, de->d_name);
+		abs_path(fullp, sizeof(fullp), dir, de->d_name);
 
 		if (lstat(fullp, &lst) < 0)
 			continue;

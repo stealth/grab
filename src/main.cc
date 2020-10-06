@@ -86,10 +86,12 @@ void *find_iterative(void *vp)
 {
 	thread_arg *ta = static_cast<thread_arg *>(vp);
 
+	const char *c_str = ta->path.c_str();
+
 	// thread_local
 	tgrep = ta->grep;
 
-	while (nftw_multi(ta->path.c_str(), thread_grep_once, 1024, G_FTW_PHYS) == 1)
+	while (nftw_multi(c_str, thread_grep_once, 1024, G_FTW_PHYS) == 1)
 		;
 
 	return nullptr;
@@ -112,7 +114,7 @@ void usage(const string &p)
 #else
 	    <<" -H -S  -- support not compiled in (hyperscan lib)\n"
 #endif
-	    <<" -L     -- machine has low mem; half chunk-size (default 1GB)\n"
+	    <<" -L     -- machine has low mem; half chunk-size (default 2GB)\n"
 	    <<"           may be used multiple times\n"
 	    <<" -I     -- enable highlighting of matches (useful)\n"
 	    <<" -n <n> -- Use n cores in parallel (recommended for flash/SSD)\n"
