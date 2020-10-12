@@ -50,6 +50,11 @@
 #endif
 #include <pthread.h>
 
+#ifdef __APPLE__
+#include <mach/thread_policy.h>
+#include <mach/mach.h>
+#endif
+
 
 using namespace std;
 using namespace grab;
@@ -243,8 +248,17 @@ int main(int argc, char **argv)
 			CPU_SET(i, &cpuset);
 
 			if ((r = pthread_setaffinity_np(tids[i], sizeof(cpuset), &cpuset)) != 0) {
-				cerr<<"pthread_setaffinity_np:"<<strerror(r)
-				    <<" (more threads than cores?)"<<endl;
+				cerr<<"pthread_setaffinity_np:"<<strerror(r)<<" (more threads than cores?)"<<endl;
+				exit(-1);
+			}
+
+// based on hybridkernel.com/2015/01/18/binding_threads_to_cores_osx.html blog entry
+#elif (defined __APPLE__)
+			thread_port_t mthread;
+			thread_affinity_policy_data_t p = { i };
+			mthread = pthread_mach_thread_np(tids[i]);
+			if (thread_policy_set(mthread, THREAD_AFFINITY_POLICY, reinterpret_cast<thread_policy_t>(&p), 1) != 0) {
+				cerr<<"thread_policy_set:"<<strerror(r)<<" (more threads than cores?)"<<endl;
 				exit(-1);
 			}
 #endif
