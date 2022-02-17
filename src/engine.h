@@ -73,7 +73,7 @@ public:
 
 	virtual int match(const char *, const char *, uint64_t, int ovector[3]) = 0;
 
-	virtual int overlap()
+	int overlap() const
 	{
 		return 0x1000;
 	}

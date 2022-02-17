@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 Sebastian Krahmer.
+ * Copyright (C) 2020-2022 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@
  */
 
 #include <string>
+#include <cstring>
 #include <vector>
 #include <map>
 #include <cstdio>
@@ -41,11 +42,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
 #include <sys/syscall.h>
-#include <pthread.h>
 
 #ifdef __APPLE__
 #include <sys/dirent.h>
@@ -63,24 +60,19 @@ extern uint32_t min_file_size;
 namespace grab {
 
 
-// all the directory handles currently handled at this depth
-// So to say, this is our recursion stack, since nftw_once()
-// is leaving recursion early after first fn() call and saving the track
-// into the vector to be popped from on re-entry.
-static vector<DIR *> dirvec;
-
-// We need to keep the directory pathname per DIR, so we can re-establish state upon re-entry
-// into nftw_once()
-static map<DIR *, string> dirmap;
+dir_cache *dirvec = nullptr;
 
 // OSX requires to save seek offsets across getdirentries() calls
 #ifdef __APPLE__
 static map<int, long> fd2seek;
 #endif
 
-static atomic<int> finished{0}, inflight{0}, initial{1};
-
-static pthread_mutex_t lck = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+	alignas(64) atomic<int> finished{0};
+	alignas(64) atomic<int> inflight{0};
+	alignas(64) atomic<int> inited{0};
+	alignas(64) atomic<int> first{1};
+} atomics;
 
 
 static int getdents(int fd, char *buf, int nbytes)
@@ -115,23 +107,29 @@ static inline DIR *opendir(const char *path)
 	if (!dp)
 		return nullptr;
 
-	// no memset() of ->data necessary: ->data is filled
+	// no memzero of ->data necessary: ->data is filled
 	// by getdents() and the d_name[] array is guaranteed
-	// to be NUL-terminated by the syscall
-	dp->size = dp->offset = 0;
+	// to be NUL-terminated by the syscall. Other members are initialized
+	// in DIR constructor.
 
 	if ((dp->fd = open(path, O_RDONLY|O_DIRECTORY)) < 0) {
 		delete dp;
 		return nullptr;
 	}
 
+	dp->dirname = strdup(path);
+
 #ifdef __APPLE__
 
 	// Must use operator[] to overwrite potential existing seek offsets
 	// after a close()/open() cycle. Access to global map is safe, because
 	// caller of opendir() holds lck.
-	fd2seek[dp->fd] = 0;
+	fd2seek[dp->fd.load()] = 0;
 #endif
+
+	// Atomic insert. the `use` counter is already been set to 1 by the DIR constructor
+	if (dirvec)
+		dirvec->insert(dp);
 
 	return dp;
 }
@@ -140,20 +138,35 @@ static inline DIR *opendir(const char *path)
 static inline dirent *readdir(DIR *dp)
 {
 	dirent *de = nullptr;
-	ssize_t n = 0;
+	size_t offset = 0, lck_offset = static_cast<size_t>(-1);
 
 	do {
-		if (dp->offset >= dp->size) {
-			if ((n = getdents(dp->fd, dp->data, sizeof(dp->data)) - 1) <= 0) {
-				de = nullptr;
+		while ((offset = dp->offset.exchange(lck_offset)) == lck_offset)
+			;
+
+		if (offset >= dp->size) {
+
+			if (dp->finished) {
+				dp->offset.store(offset);
 				break;
 			}
-			dp->size = static_cast<uint64_t>(n);
-			dp->offset = 0;
+
+			if ((dp->size = static_cast<uint64_t>(getdents(dp->fd, dp->data, sizeof(dp->data) - 1))) <= 0) {
+				dp->size = 0;
+				dp->finished = 1;
+				dp->offset.store(0);
+				break;
+			}
+			offset = 0;
+
+			// if less data was read than there is space for one more dirent,
+			// it could only mean that we read all entries of that DIR
+			if (dp->size < (sizeof(dp->data) - sizeof(dirent)))
+				dp->finished = 1;
 		}
 
-		de = reinterpret_cast<dirent *>(&dp->data[dp->offset]);
-		dp->offset += de->d_reclen;
+		de = reinterpret_cast<dirent *>(&dp->data[offset]);
+		dp->offset.store(offset + de->d_reclen);
 
 	} while (de->d_ino == 0);
 
@@ -163,11 +176,19 @@ static inline dirent *readdir(DIR *dp)
 
 static inline int closedir(DIR *dp)
 {
-	if (dp->fd >= 0) {
-		close(dp->fd);
-		dp->fd = -1;
+	// might race with other closedir() of same DIR*, so make erase() atomic and once
+	if (dp->erase_lck.exchange(1) == 0) {
+		if (dirvec)
+			dirvec->erase(dp->fd.load());
 	}
-	delete dp;
+
+	// only the last one on this DIR* may close() and free resources
+	if (dp->use.fetch_sub(1) == 1) {
+		close(dp->fd.load());
+		free(dp->dirname);
+		delete dp;
+	}
+
 	return 0;
 }
 
@@ -183,162 +204,130 @@ static inline void abs_path(char *dst, size_t dstlen, const char *dir, const cha
 }
 
 
-static int nftw_once(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed)
+static int nftw_once(const char *dir, int (*fn) (int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed)
 {
-	char fullp[4096] = {0};
-	DIR *dfd = nullptr;
-	const char *dirname = nullptr;
+	DIR *dp = nullptr;
 	struct dirent *de = nullptr;
 	struct stat lst;
 
 
 	// retval: 0 -> end of entries, 1 -> can be called once more
 
-	if (finished.load() == 1)
+	if (atomics.finished)
 		return 0;
 
-	pthread_mutex_lock(&lck);
+	if (dirvec->empty() || recursed) {
 
-	++inflight;
+		if (!recursed) {
 
-	// The end condition: we are not called from a recursion (but by a thread iteratively)
-	// and except ourselfes, there is noone else inside this function. We are also already
-	// through at least once (initial == 0) and we have no DIR entries left to check.
-	// This end condition is guaranteed to happen: At some point T, all DIRs are read (recursively)
-	// and therefore dirvec will be empty at T and no calls with recursed == 1 are made anymore.
-	// inflights will descend to the amount of parallel threads at T and will eventually be 1
-	// due to above lck and the "--inflight" after the "if (!recursed && initial.load() == 0)" below.
-	if (!recursed && inflight.load() == 1 && initial.load() == 0 && dirvec.empty()) {
-		--inflight;
-		finished.store(1);
-		// dirvec already empty
-		dirmap.clear();
-		pthread_mutex_unlock(&lck);
-		return 0;
-	}
+			if (atomics.inflight == 0 && atomics.inited == 1) {
+				atomics.finished = 1;
+				return 0;
+			}
 
-	if (dirvec.empty() || recursed) {
-
-		// This might happen if we are here iteratively
-		// and dirvec has not yet been filled by a recursion (dirvec.empty())
-		// of another thread. Do not re-fill dirvec with the initial dir again.
-		if (!recursed && initial.load() == 0) {
-			--inflight;
-			pthread_mutex_unlock(&lck);
-			return 1;
+			// This might happen if we are here iteratively
+			// and dirvec has not yet been filled by a recursion (dirvec.empty())
+			// of another thread. Do not re-fill dirvec with the initial dir again.
+			if (atomics.first.exchange(0) == 0)
+				return 1;
 		}
-		if (dirvec.empty())
-			dirvec.reserve(1024*1024);
 
-		if ((dfd = opendir(dir)) == nullptr) {
-			--inflight;
-			pthread_mutex_unlock(&lck);
-			return 1;
+		++atomics.inflight;
+
+		if ((dp = opendir(dir)) == nullptr) {
+			--atomics.inflight;
+			return -1;
 		}
-		dirvec.push_back(dfd);
 
-		// must use operator[] and can't use insert(), because insert() would not overwrite
-		// existing entries, and since we might closedir/opendir/... and therefore re-cycle 'dfd' allocs,
-		// and do not erase() map elements when we remove it from dirvec, we would end up with
-		// wrong mappings
-		dirmap[dfd] = dir;
-		dirname = dir;
+		atomics.inited = 1;
+
+		// dp is emplaced on the back of dir_vec by opendir() - no store necessary.
+		// it will have ref_cnt of 1, for the storage in dir_cache
+		//dirvec.emplace_back(dp);
+
 	} else {
-		dfd = dirvec.back();
-		dirname = dirmap[dfd].c_str();
+
+		++atomics.inflight;
+
+		if ((dp = dirvec->fetch1()) == nullptr) {
+			--atomics.inflight;
+			return 1;
+		}
 	}
 
-	// No longer uninited; we filled dirvec at least once at this point
-	initial.store(0);
-
-	// lock is still held on entry, and the loop is ment to execute just
-	// once in most cases, so take care to lock in the "continue" case
 	for (;;) {
 
-		if ((de = readdir(dfd)) == nullptr) {
-
-			// This is thhe only place where its allowed to remove DIRs from dirvec:
-			// All entries have been read. dfd is the last entry, so it can just be popped.
-			// This is since we continously locked dirvec and no other thread could
-			// have pushed or popped something in between.
-			dirvec.pop_back();
-			closedir(dfd);
-			dfd = nullptr;
-			pthread_mutex_unlock(&lck);
+		if ((de = readdir(dp)) == nullptr)
 			break;
-		}
 
-		// still locked, no need to lock again in continue
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		// double slashes in pathnames do not matter (in case initial dir had prepended /)
-		abs_path(fullp, sizeof(fullp), dirname, de->d_name);
-
-		pthread_mutex_unlock(&lck);
-
-		if (lstat(fullp, &lst) < 0)
-			break;
+		if (fstatat(dp->fd.load(), de->d_name, &lst, AT_SYMLINK_NOFOLLOW) < 0)
+			continue;
 
 		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
+			char fullp[4096];
+
+			// double slashes in pathnames do not matter (in case initial dir had prepended /)
+			abs_path(fullp, sizeof(fullp), dp->dirname, de->d_name);
 			nftw_once(fullp, fn, 1);
 		} else if (S_ISREG(lst.st_mode)) {
 			if (!min_file_size || lst.st_size >= min_file_size)
-				fn(fullp, &lst, G_FTW_F, nullptr);
+				fn(dp->fd.load(), dp->dirname, de->d_name, &lst, G_FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
-
-		break;
 	}
 
-	--inflight;
+	closedir(dp);
+
+	--atomics.inflight;
 	return 1;
 }
 
 
 // Parallel + racursive nftw() version for multicore. nopenfd is ignored
-int nftw_multi(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
+int nftw_multi(const char *dir, int (*fn)(int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
 	return nftw_once(dir, fn, 0);
 }
 
 
 // Single threaded version, no locking required. nopenfd is ignored
-int nftw_single(const char *dir, int (*fn) (const char *fpath, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
+int nftw_single(const char *dir, int (*fn)(int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
-	char fullp[4096] = {0};
-	DIR *dfd = nullptr;
+	DIR *dp = nullptr;
 	struct dirent *de = nullptr;
 	struct stat lst;
 
-	if ((dfd = opendir(dir)) == nullptr)
+	if ((dp = opendir(dir)) == nullptr)
 		return -1;
 
 	for (;;) {
 
-		if ((de = readdir(dfd)) == nullptr) {
-			closedir(dfd);
+		if ((de = readdir(dp)) == nullptr) {
+			closedir(dp);
 			return 0;
 		}
 
 		if (de->d_name[0] == '.' && (de->d_name[1] == 0 || (de->d_name[1] == '.' && de->d_name[2] == 0)))
 			continue;
 
-		abs_path(fullp, sizeof(fullp), dir, de->d_name);
-
-		if (lstat(fullp, &lst) < 0)
+		if (fstatat(dp->fd.load(), de->d_name, &lst, AT_SYMLINK_NOFOLLOW) < 0)
 			continue;
 
 		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
+			char fullp[4096];
+
+			abs_path(fullp, sizeof(fullp), dir, de->d_name);
 			nftw_single(fullp, fn, nopenfd, flags);
 		} else if (S_ISREG(lst.st_mode)) {
 			if (!min_file_size || lst.st_size >= min_file_size)
-				fn(fullp, &lst, G_FTW_F, nullptr);
+				fn(dp->fd.load(), dir, de->d_name, &lst, G_FTW_F, nullptr);
 		}
 		// ignore symlinks and other files
-
 	}
 
 	return 0;

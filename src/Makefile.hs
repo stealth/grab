@@ -4,7 +4,7 @@
 
 .PHONY: all clean
 
-DEFS=-DWITH_HYPERSCAN
+DEFS=-DWITH_HYPERSCAN -DPCRE2_CODE_UNIT_WIDTH=8
 
 CXX=c++
 
@@ -13,7 +13,7 @@ CFLAGS=-c -Wall -O3 -pedantic -std=c++11
 INC=-I/usr/local/include -I${HYPERSCAN_BUILD}/../src
 
 LFLAGS=-L/usr/local/lib -L${HYPERSCAN_BUILD}/lib -Wl,-rpath=${HYPERSCAN_BUILD}/lib
-LIBS+=-lpcre -lhs
+LIBS+=-lpcre -lpcre2-8 -lhs
 
 
 ifeq ($(shell uname), NetBSD)
@@ -31,8 +31,8 @@ endif
 
 all: greppin
 
-greppin: grab.o main.o nftw.o engine-pcre.o engine-hs.o
-	$(CXX) grab.o main.o nftw.o engine-pcre.o engine-hs.o $(LFLAGS) $(LIBS) -o greppin
+greppin: grab.o main.o nftw.o engine-pcre.o engine-pcre2.o engine-hs.o
+	$(CXX) grab.o main.o nftw.o engine-pcre.o engine-pcre2.o engine-hs.o $(LFLAGS) $(LIBS) -o greppin
 
 main.o: main.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o main.o
@@ -45,6 +45,9 @@ grab.o: grab.cc grab.h
 
 engine-pcre.o: engine-pcre.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o engine-pcre.o
+
+engine-pcre2.o: engine-pcre2.cc
+	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o engine-pcre2.o
 
 engine-hs.o: engine-hs.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o engine-hs.o

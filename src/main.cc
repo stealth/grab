@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2020 Sebastian Krahmer.
+ * Copyright (C) 2012-2022 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <thread>
 #include <cstdio>
 #include <stdint.h>
 #include <iostream>
@@ -42,18 +43,10 @@
 #include <cerrno>
 #include <cstring>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include "grab.h"
 #include "nftw.h"
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <pthread.h>
-
-#ifdef __APPLE__
-#include <mach/thread_policy.h>
-#include <mach/mach.h>
-#endif
 
 
 using namespace std;
@@ -70,20 +63,26 @@ __thread FileGrep *tgrep = nullptr;
 thread_local FileGrep *tgrep = nullptr;
 #endif
 
-pthread_mutex_t start_lck = PTHREAD_MUTEX_INITIALIZER;
-
 struct thread_arg {
-	int idx, nthreads;
-	string path;
-	FileGrep *grep;
+	string path{""};
+	FileGrep *grep{nullptr};
+
+	int idx{0}, nthreads{0};
+
+public:
+
+	virtual ~thread_arg()
+	{
+		delete grep;
+	}
 };
 
 
-int thread_grep_once(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
+int thread_grep_once(int dfd, const char *dirname, const char *basename, const struct stat *st, int typeflag, void *ftwbuf)
 {
 	// since we use our own dedicated nftw() impl, only typeglag == FTW_F
 	// and S_ISREG() files will reach us, so we do not need to check again
-	return tgrep->find(path, st, G_FTW_F);
+	return tgrep->find(dfd, dirname, basename, st, G_FTW_F);
 }
 
 
@@ -106,27 +105,25 @@ void *find_iterative(void *vp)
 void usage(const string &p)
 {
 	cout<<"\nParallel grep (C) Sebastian Krahmer -- https://github.com/stealth/grab\n\n"
-	    <<"Usage: "<<p<<" [-rRIOLlsSH] [-n <cores>] <regex> <path>\n\n"
-	    <<" -O     -- print file offset of match\n"
-	    <<" -l     -- do not print the matching line (Useful if you want\n"
-	    <<"           to see _all_ offsets; if you also print the line, only\n"
-	    <<"           the first match in the line counts)\n"
-	    <<" -s     -- single match; dont search file further after first match\n"
-	    <<"           (similar to grep on a binary)\n"
+	    <<"Usage: "<<p<<" [-rIOLlsSH] [-n <cores>] <regex> <path>\n\n"
+	    <<"\t-2\t-- use PCRE2 instead of PCRE\n"
+	    <<"\t-O\t-- print file offset of match\n"
+	    <<"\t-l\t-- do not print the matching line (Useful if you want\n"
+	    <<"\t\t   to see _all_ offsets; if you also print the line, only\n"
+	    <<"\t\t   the first match in the line counts)\n"
+	    <<"\t-s\t-- single match; dont search file further after first match\n"
+	    <<"\t\t   (similar to grep on a binary)\n"
 #ifdef WITH_HYPERSCAN
-	    <<" -H     -- use hyerscan lib for scanning (see build instructions)\n"
-	    <<" -S     -- only for hyperscan: interpret pattern as string literal instead of regex\n"
+	    <<"\t-H\t-- use hyperscan lib for scanning\n"
+	    <<"\t-S\t-- only for hyperscan: interpret pattern as string literal instead of regex\n"
 #else
-	    <<" -H -S  -- support not compiled in (hyperscan lib)\n"
+	    <<"\t-H -S\t-- support not compiled in (hyperscan lib)\n"
 #endif
-	    <<" -L     -- machine has low mem; half chunk-size (default 2GB)\n"
-	    <<"           may be used multiple times\n"
-	    <<" -I     -- enable highlighting of matches (useful)\n"
-	    <<" -n <n> -- Use n cores in parallel (recommended for flash/SSD)\n"
-	    <<"           n <= 1 uses single-core\n"
-	    <<" -r     -- recurse on directory\n"
-	    <<" -R     -- same as -r\n\n";
-
+	    <<"\t-L\t-- machine has low mem; half chunk-size (default 2GB)\n"
+	    <<"\t\t   may be used multiple times\n"
+	    <<"\t-I\t-- enable highlighting of matches (useful)\n"
+	    <<"\t-n\t-- Use multiple cores in parallel (omit for single core)\n"
+	    <<"\t-r\t-- recurse on directory\n\n";
 
 	exit(1);
 }
@@ -138,8 +135,11 @@ int main(int argc, char **argv)
 	map<string, size_t> config;
 	size_t chunk_size = 1<<30;
 
-	while ((c = getopt(argc, argv, "Rrn:IOlsSLH")) != -1) {
+	while ((c = getopt(argc, argv, "2Rrn:IOlsSLH")) != -1) {
 		switch (c) {
+		case '2':
+			config["pcre2"] = 1;
+			break;
 		case 'r':
 		case 'R':
 			config["recursive"] = 1;
@@ -192,6 +192,10 @@ int main(int argc, char **argv)
 
 	if (cores > 1) {
 
+		rlimit rl{0, 0};
+		getrlimit(RLIMIT_NOFILE, &rl);
+		dirvec = new (nothrow) dir_cache(rl.rlim_cur);
+
 		if (config.count("recursive") == 0) {
 			cerr<<"Multicore support only for recursive grabs.\n";
 			return -1;
@@ -202,9 +206,8 @@ int main(int argc, char **argv)
 
 		FileGrep *tgrep = nullptr;
 		thread_arg *ta = new (nothrow) thread_arg[cores];
-		pthread_t *tids = new (nothrow) pthread_t[cores];
 
-		if (!ta || !tids) {
+		if (!ta) {
 			cerr<<"Out of memory.\n";
 			return -1;
 		}
@@ -233,47 +236,20 @@ int main(int argc, char **argv)
 			ta[i].path = path;
 		}
 
-		int r = 0;
+		vector<thread> tds;
 
-		for (int i = 0; i < cores; ++i) {
+		for (int i = 0; i < cores; ++i)
+			tds.emplace_back(find_iterative, ta + i);
 
-			if ((r = pthread_create(tids + i, nullptr, find_iterative, ta + i)) != 0) {
-				cerr<<"pthread_create: "<<strerror(r)<<endl;
-				exit(-1);
-			}
+		for (auto it = tds.begin(); it != tds.end(); ++it)
+			it->join();
 
-#ifdef __linux__
-			cpu_set_t cpuset;
-			CPU_ZERO(&cpuset);
-			CPU_SET(i, &cpuset);
-
-			if ((r = pthread_setaffinity_np(tids[i], sizeof(cpuset), &cpuset)) != 0) {
-				cerr<<"pthread_setaffinity_np:"<<strerror(r)<<" (more threads than cores?)"<<endl;
-				exit(-1);
-			}
-
-// based on hybridkernel.com/2015/01/18/binding_threads_to_cores_osx.html blog entry
-#elif (defined __APPLE__)
-			thread_port_t mthread;
-			thread_affinity_policy_data_t p = { i };
-			mthread = pthread_mach_thread_np(tids[i]);
-			if (thread_policy_set(mthread, THREAD_AFFINITY_POLICY, reinterpret_cast<thread_policy_t>(&p), 1) != 0) {
-				cerr<<"thread_policy_set:"<<strerror(r)<<" (more threads than cores?)"<<endl;
-				exit(-1);
-			}
-#endif
-		}
-
-		for (int i = 0; i < cores; ++i) {
-			pthread_join(tids[i], nullptr);
-			delete ta[i].grep;
-		}
+		for (int i = 0; i < cores; ++i)
+			ta[i].grep->flush_ostream();
 
 		delete [] ta;
-		delete [] tids;
-
+		delete dirvec;
 		exit(0);
-
 	}
 
 	if (!(grep = new (nothrow) FileGrep)) {
@@ -310,6 +286,8 @@ int main(int argc, char **argv)
 				break;
 		}
 	}
+
+	grep->flush_ostream();
 
 	delete grep;
 

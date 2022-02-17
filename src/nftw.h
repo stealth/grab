@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 Sebastian Krahmer.
+ * Copyright (C) 2020-2022 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,6 +35,8 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include <atomic>
+#include <vector>
 #include <sys/stat.h>
 
 
@@ -48,20 +50,29 @@ namespace grab {
 enum {
 	G_FTW_PHYS	= 1,
 	G_FTW_F		= 0x1000
-
 };
 
 
 // aligned to 64bit for ->data to be passed to
 // getdents' dirent struct
 struct DIR {
-	int32_t fd;
-	int32_t align;
+	std::atomic<int32_t> fd{-1}, use{1}, erase_lck{0};
+	std::atomic<uint64_t> size{0}, offset{0};
 
-	uint64_t size;
-	uint64_t offset;
+	char *dirname{nullptr};
 
-	char data[0x10000 - 3*8];
+	std::atomic<char> finished{0};
+
+	char data[0x30000 - (3*sizeof(std::atomic<int32_t>) +
+	                     2*sizeof(std::atomic<uint64_t>) +
+	                     sizeof(char *) +
+	                     sizeof(std::atomic<char>))];
+
+	// avoid default initialization by compiler, to not have costly
+	// memzero of ->data member, which is unnecessary
+	DIR() {}
+
+	~DIR() {}
 };
 
 
@@ -137,10 +148,84 @@ struct dirent {
 
 #endif
 
+class dir_cache {
 
-int nftw_multi(const char *, int (*fn) (const char *, const struct stat *, int, void *), int, int);
+	std::vector<std::atomic<DIR *>> d_vec;
 
-int nftw_single(const char *, int (*fn) (const char *, const struct stat *, int, void *), int, int);
+	std::atomic<int32_t> d_max_fd{0}, d_entries{0}, d_cur_idx{0};
+
+public:
+
+	dir_cache(int nfd) : d_vec(nfd + 1)
+	{
+		d_max_fd.store(nfd);
+	}
+
+	virtual ~dir_cache()
+	{
+	}
+
+	dir_cache(const dir_cache &) = delete;
+
+	dir_cache &operator=(const dir_cache &) = delete;
+
+	void insert(DIR *dp)
+	{
+		int fd = dp->fd.load();
+		d_vec[fd].store(dp);
+		d_cur_idx.store(fd);
+//		if (fd > d_max_fd.load())
+//			d_max_fd.store(fd);
+		d_entries.fetch_add(1);
+	}
+
+	DIR *fetch1()
+	{
+		DIR *dp = nullptr;
+
+		for (int i = d_cur_idx.load(); d_entries.load() > 0;) {
+			i = i % (d_max_fd.load() + 1);
+			if ((dp = d_vec[i].exchange(nullptr)) == nullptr) {
+				++i;
+				continue;
+			}
+			// We might fetched an DIR* that is erased from d_vec soon after, but this
+			// doesn't matter, as this will have erase_lck set then (and won't be erased or appear in d_vec again) as well
+			// as the finished bit set, so readdir() on it will immediately return nullptr. We leave
+			// this logic to the nftw() loop.
+
+			dp->use.fetch_add(1);
+			d_vec[i].store(dp);
+			d_cur_idx.store(i);
+			break;
+		}
+		return dp;
+	}
+
+	void erase(int fd)
+	{
+		// Can only have been called exclusively on fd by closedir() with fd still open,
+		// so this does not race with other erase() calls on the same fd, only with fetch1().
+		// We assume that a DIR* with that fd has once been stored in d_vec.
+		// If this loops, someone is on fetch1() on this fd and will soon replace it by DIR* again.
+		while (d_vec[fd].exchange(nullptr) == nullptr)
+			;
+		d_entries.fetch_sub(1);
+	}
+
+	bool empty()
+	{
+		return d_entries == 0;
+	}
+
+};
+
+
+int nftw_multi(const char *, int (*fn)(int, const char *, const char *, const struct stat *, int, void *), int, int);
+
+int nftw_single(const char *, int (*fn)(int, const char *, const char *, const struct stat *, int, void *), int, int);
+
+extern dir_cache *dirvec;
 
 }
 

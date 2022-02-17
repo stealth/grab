@@ -11,9 +11,9 @@ CFLAGS=-c -Wall -O3 -pedantic -std=c++11
 INC=-I/usr/local/include
 
 LFLAGS=-L/usr/local/lib
-LIBS+=-lpcre
+LIBS+=-lpcre -lpcre2-8
 
-DEFS=
+DEFS=-DPCRE2_CODE_UNIT_WIDTH=8
 
 ifeq ($(shell uname), NetBSD)
 INC+=-I/usr/pkg/include
@@ -28,8 +28,8 @@ endif
 
 all: greppin
 
-greppin: grab.o main.o nftw.o engine-pcre.o
-	$(CXX) grab.o main.o nftw.o engine-pcre.o $(LFLAGS) $(LIBS) -o greppin
+greppin: grab.o main.o nftw.o engine-pcre.o engine-pcre2.o
+	$(CXX) grab.o main.o nftw.o engine-pcre.o engine-pcre2.o $(LFLAGS) $(LIBS) -o greppin
 
 main.o: main.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o main.o
@@ -42,6 +42,9 @@ grab.o: grab.cc grab.h
 
 engine-pcre.o: engine-pcre.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o engine-pcre.o
+
+engine-pcre2.o: engine-pcre2.cc
+	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o engine-pcre2.o
 
 clean:
 	rm -f *.o

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012-2020 Sebastian Krahmer.
+ * Copyright (C) 2012-2022 Sebastian Krahmer.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,10 +35,10 @@
 #include <cstdio>
 #include <stdint.h>
 #include <iostream>
-#include <sstream>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>
+#include <atomic>
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -46,15 +46,11 @@
 #include "nftw.h"
 #include "engine.h"
 #include "engine-pcre.h"
+#include "engine-pcre2.h"
 
 #ifdef WITH_HYPERSCAN
 #include "engine-hs.h"
 #endif
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-#include <pthread.h>
 
 
 using namespace std;
@@ -65,7 +61,7 @@ extern grab::FileGrep *grep;
 
 namespace grab {
 
-pthread_mutex_t stdout_lock = PTHREAD_MUTEX_INITIALIZER;
+atomic<char> stdout_lck{0};
 
 char *const fail_addr = (char *)-1;
 
@@ -108,6 +104,8 @@ int FileGrep::config(const map<string, size_t> &config)
 		d_err = "No hyperscan support built in. Use Makefile.hs for building.\n";
 		return -1;
 #endif
+	} else if (config.count("pcre2") > 0) {
+		d_engine = new (nothrow) pcre2_engine;
 	} else
 		d_engine = new (nothrow) pcre_engine;
 
@@ -132,7 +130,7 @@ enum {
 };
 
 
-int FileGrep::find(const char *path, const struct stat *st, int typeflag)
+int FileGrep::find(int dfd, const char *dirname, const char *basename, const struct stat *st, int typeflag)
 {
 	size_t clen = st->st_size;
 
@@ -148,17 +146,14 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 		flags |= O_NOATIME;
 #endif
 
-	if ((fd = open(path, flags)) < 0) {
+	if ((fd = openat(dfd, basename, flags)) < 0) {
 		d_err = "FileGrep::find::open: " + string(strerror(errno));
 		return -1;
 	}
 
 	char *content = nullptr;
-	const int overlap = 0x1000;	//d_engine->overlap();
-	ostringstream str;
 
-	char before[512] = {0}, after[512] = {0};
-	int ovector[3] = {0}, rc = -1;
+	const int overlap = 0x1000;	//d_engine->overlap();
 
 	// no impls yet
 	//d_engine->pre_match();
@@ -184,15 +179,17 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 
 		for (;start + d_minlen < end;) {
 
-			if ((rc = d_engine->match(content, start, end - start, ovector)) <= 0)
+			int ovector[3];
+			if (d_engine->match(content, start, end - start, ovector) <= 0)
 				break;
 
 			if (d_recursive || d_print_path)
-				str<<path<<":";
+				d_ostr<<dirname<<"/"<<basename<<":";
 
 			if (d_print_offset)
-				str<<"Match at offset "<<off + start - content + (int)ovector[0]<<endl;
+				d_ostr<<"Match at offset "<<off + start - content + (int)ovector[0]<<endl;
 
+			char before[512], after[512];	// not needed to be 0-initialized
 			uint16_t a = 0, b = sizeof(before) - 1;
 			if (d_print_line) {
 				const char *ptr = start + ovector[0] - 1;
@@ -202,15 +199,15 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 				ptr = start + ovector[1];
 				while (ptr < end && *ptr != '\n' && a < sizeof(after) - 1)
 					after[a++] = *ptr++;
-				str<<string(before + b + 1, sizeof(before) - b - 1);
+				d_ostr<<string(before + b + 1, sizeof(before) - b - 1);
 				if (d_colored)
-					str<<start_inv;
-				str<<string(start + ovector[0], ovector[1] - ovector[0]);
+					d_ostr<<start_inv;
+				d_ostr<<string(start + ovector[0], ovector[1] - ovector[0]);
 				if (d_colored)
-					str<<stop_inv;
-				str<<string(after, a)<<endl;
+					d_ostr<<stop_inv;
+				d_ostr<<string(after, a)<<endl;
 			} else if (!d_print_offset) {
-				str<<"matches\n";
+				d_ostr<<"matches\n";
 				break;
 			}
 
@@ -222,15 +219,16 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 
 		munmap(content, clen);
 
-		if (str.str().size() > 0) {
+		if (d_ostr.str().size() > 0) {
 
-			pthread_mutex_lock(&stdout_lock);
-			cout<<str.str();
-			pthread_mutex_unlock(&stdout_lock);
+			if (stdout_lck.exchange(1) == 0) {
+				cout<<d_ostr.str();
+				stdout_lck.exchange(0);
 
-			str.flush();
-			str.clear();
-			str.str("");
+				d_ostr.flush();
+				d_ostr.clear();
+				d_ostr.str("");
+			}
 
 			if (d_single_match)
 				break;
@@ -244,6 +242,15 @@ int FileGrep::find(const char *path, const struct stat *st, int typeflag)
 }
 
 
+void FileGrep::flush_ostream()
+{
+	cout<<d_ostr.str();
+	d_ostr.flush();
+	d_ostr.clear();
+	d_ostr.str("");
+}
+
+
 int FileGrep::find(const string &path)
 {
 	struct stat st;
@@ -254,20 +261,20 @@ int FileGrep::find(const string &path)
 	int r = 0;
 
 	if (S_ISREG(st.st_mode))
-		r = find(path.c_str(), &st, G_FTW_F);
+		r = find(AT_FDCWD, "", path.c_str(), &st, G_FTW_F);
 	else if (S_ISDIR(st.st_mode))
-		cerr<<"Clever boy! Want recursion? Add -R!\n";
+		cerr<<"Want recursion? Add -R!\n";
 
 	return r;
 }
 
 
-int walk(const char *path, const struct stat *st, int typeflag, void *ftwbuf)
+int walk(int dfd, const char *dirname, const char *basename, const struct stat *st, int typeflag, void *ftwbuf)
 {
 	// Since we use our own dedicated nftw() impl, only FTW_F and S_ISREG()
 	// files will reach this callback, so no need to check again for it
-	if (grep->find(path, st, typeflag) < 0)
-		cerr<<path<<": "<<grep->why()<<endl;
+	if (grep->find(dfd, dirname, basename, st, typeflag) < 0)
+		cerr<<dirname<<"/"<<basename<<": "<<grep->why()<<endl;
 	return 0;
 }
 
