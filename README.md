@@ -13,23 +13,22 @@ a factor of 8.
 Options:
 
 ```
+Usage: ./greppin [-rIOLlsSH] [-n <cores>] <regex> <path>
 
- -O     -- print file offset of match
- -l     -- do not print the matching line (Useful if you want
-           to see _all_ offsets; if you also print the line, only
-           the first match in the line counts)
- -s     -- single match; dont search file further after first match
-           (similar to grep on a binary)
- -H     -- use hyerscan lib for scanning (see build instructions)
- -S     -- only for hyperscan: interpret pattern as string literal instead of regex
- -L     -- machine has low mem; half chunk-size (default 1GB)
-           may be used multiple times
- -I     -- enable highlighting of matches (useful)
- -n <n> -- Use n cores in parallel (recommended for flash/SSD)
-           n <= 1 uses single-core
- -r     -- recurse on directory
- -R     -- same as -r
-
+	-2	-- use PCRE2 instead of PCRE
+	-O	-- print file offset of match
+	-l	-- do not print the matching line (Useful if you want
+		   to see _all_ offsets; if you also print the line, only
+		   the first match in the line counts)
+	-s	-- single match; dont search file further after first match
+		   (similar to grep on a binary)
+	-H	-- use hyperscan lib for scanning
+	-S	-- only for hyperscan: interpret pattern as string literal instead of regex
+	-L	-- machine has low mem; half chunk-size (default 2GB)
+		   may be used multiple times
+	-I	-- enable highlighting of matches (useful)
+	-n	-- Use multiple cores in parallel (omit for single core)
+	-r	-- recurse on directory
 ```
 
 
@@ -59,6 +58,7 @@ $ cd src; make
 [...]
 ```
 
+Make sure you have the *pcre* and *pcre2* library packages installed.
 On BSD systems you need `gmake` instead of `make`.
 If you want to do cutting edge tech with _greppin's_ multiple regex engine and hyperscan
 support, you first need to get and build that:
@@ -110,7 +110,7 @@ Additionally, _grab_ is skipping files which are too small to contain the
 regular expression. For larger regex's in a recursive search, this can
 skip quite good amount of files without even opening them.
 
-A quite new pcre lib is required, on some older systems the build can fail
+A quite new *pcre* lib is required, on some older systems the build can fail
 due to a missing `PCRE_INFO_MINLENGTH` and `pcre_study()`.
 
 Files are mmaped and matched in chunks of 1Gig. For files which are larger,
@@ -134,11 +134,9 @@ For SSDs, the multicore option makes sense. For HDDs it does not, since
 the head has to be positioned back and forth between the threads, potentially
 destroying the locality principle and killing performance.
 
-The `greppin` branch features its own parallel version of `nftw()`, so the time
+The `greppin` branch features its own lockfree parallel version of `nftw()`, so the time
 of idling of N - 1 cores when the 1st core builds the directory tree can also
-be used for working. Additional to that, since locking is required in the
-threads anyway, it also comes with its own faster and lockfree `readdir()` implementation
-to save quite some `futex()` calls.
+be used for working.
 
 Whats left to note: _grab_ will traverse directories _physically_, i.e. it will not follow
 symlinks.
@@ -221,23 +219,11 @@ searching on large file trees. On multi-core setups, _grab_ can benefit ofcorse.
 ripgrep comparison
 ------------------
 
-I recently learned about this project via twitter when I was asked for performance
-comparisons. The project can be found [here](https://github.com/BurntSushi/ripgrep).
-I tested their official build `ripgrep-12.1.1-x86_64-unknown-linux-musl.tar.gz`
-and run it on the same 4-core SSD machine as in the above tests. The net result is:
-both runs have about the same speed with a tendency of _greppin_ being a few percent faster
-when _ripgrep_ is invoked with `-P`. _ripgrep_ with `-e` is a few percent faster
-than _greppin_ with `-H`.
-ITW, it actually also depends on the directory tree layout since my `nftw()`
-implementation takes care to distribute load across cores even on unbalanced directory trees
-at the price of locking. _ripgrep_ claims to use a lockfree parallel directory iterator
-written in Rust. I see small speedup of _ripgrep_ when scanning `/usr` but I see
-the same amount of speedup (just few %) in _greppin_ when scanning my Linux source
-trees.
+The project can be found [here](https://github.com/BurntSushi/ripgrep).
 
 The main speedup thats inside their benchmark tables stems from the fact that _ripgrep_
-ignores a lot of files when invoked without special options as well as treating
-binary files as a single-match target (similar to _grep_). In order to have
+ignores a lot of files (notably  dotfiles) when invoked without special options as well
+as treating binary files as a single-match target (similar to _grep_). In order to have
 comparable results, keep in mind to (4 is the number of cores):
 
 * `echo 3 > /proc/sys/vm/drop_caches` between each run
@@ -245,12 +231,13 @@ comparable results, keep in mind to (4 is the number of cores):
   it will by default match Unicode which is 3 times slower, and tries to compensate
   the speedloss by skipping 'ignore'-based files. `-e` is faster than `-P`,
   so better choose `-e`, but thats not as powerful as a PCRE
-* pipe the output to `wc -l` to check whether the amount of match reports is equal
-  and no files were missing in the scan
+* redirect the output to `/dev/null` to avoid tty based effects
 * add `-H -n 4` to _greppin_ if you want best performance. `-H` is PCRE compatible
   with only very few exceptions (according to hyperscan docu)
 * `setfattr -n user.pax.flags -v "m" /path/to/binary` if you run on grsec systems
   and require rwx JIT mappings
 
-Then just go ahead and check the timings! :)
+Then just go ahead and check the timings. Even when not using hyperscan, `greppin`
+is significantly faster than `rg` when using PCRE2 expressions (PCRE2 vs. PCRE2)
+and still faster when comparing the fastest expressions (-e vs. hyperscan).
 
