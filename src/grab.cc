@@ -183,8 +183,11 @@ int FileGrep::find(int dfd, const char *dirname, const char *basename, const str
 			if (d_engine->match(content, start, end - start, ovector) <= 0)
 				break;
 
-			if (d_recursive || d_print_path)
-				d_ostr<<dirname<<"/"<<basename<<":";
+			if (d_recursive || d_print_path) {
+				if (d_recursive)
+					d_ostr<<dirname<<"/";
+				d_ostr<<basename<<":";
+			}
 
 			if (d_print_offset)
 				d_ostr<<"Match at offset "<<off + start - content + (int)ovector[0]<<endl;

@@ -105,7 +105,7 @@ void *find_iterative(void *vp)
 void usage(const string &p)
 {
 	cout<<"\nParallel grep (C) Sebastian Krahmer -- https://github.com/stealth/grab\n\n"
-	    <<"Usage: "<<p<<" [-rIOLlsSH] [-n <cores>] <regex> <path>\n\n"
+	    <<"Usage: "<<p<<" [-2rIOLlsSH] [-n <cores>] <regex> <path>\n\n"
 	    <<"\t-2\t-- use PCRE2 instead of PCRE\n"
 	    <<"\t-O\t-- print file offset of match\n"
 	    <<"\t-l\t-- do not print the matching line (Useful if you want\n"
