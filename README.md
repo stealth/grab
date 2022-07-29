@@ -141,6 +141,12 @@ be used for working.
 Whats left to note: _grab_ will traverse directories _physically_, i.e. it will not follow
 symlinks.
 
+spot
+----
+
+`spot` is the parallel version of `find`. It supports the most frequently used options as
+you know it. Theres not much more to tell about it, just try it out.
+
 
 Examples
 --------
