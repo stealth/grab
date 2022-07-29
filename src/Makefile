@@ -12,6 +12,7 @@ INC=-I/usr/local/include
 
 LFLAGS=-L/usr/local/lib
 LIBS+=-lpcre -lpcre2-8
+PLIBS=
 
 DEFS=-DPCRE2_CODE_UNIT_WIDTH=8
 
@@ -23,16 +24,25 @@ endif
 ifeq ($(shell uname), Darwin)
 DEFS+=
 else
-LIBS+=-pthread
+PLIBS=-pthread
 endif
 
-all: greppin
+all: greppin spot
 
 greppin: grab.o main.o nftw.o engine-pcre.o engine-pcre2.o
-	$(CXX) grab.o main.o nftw.o engine-pcre.o engine-pcre2.o $(LFLAGS) $(LIBS) -o greppin
+	$(CXX) grab.o main.o nftw.o engine-pcre.o engine-pcre2.o $(LFLAGS) $(LIBS) $(PLIBS) -o greppin
+
+spot: spot.o filter.o nftw.o
+	$(CXX) spot.o nftw.o filter.o $(LFLAGS) $(PLIBS) -o spot
 
 main.o: main.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o main.o
+
+filter.o: filter.cc
+	$(CXX) $(CFLAGS) $(INC) $< -o filter.o
+
+spot.o: spot.cc
+	$(CXX) $(CFLAGS) $(INC) $< -o spot.o
 
 nftw.o: nftw.cc
 	$(CXX) $(CFLAGS) $(INC) $(DEFS) $< -o nftw.o

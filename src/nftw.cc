@@ -54,7 +54,7 @@
 using namespace std;
 
 
-extern uint32_t min_file_size;
+extern uint32_t min_file_size, max_recursion_depth;
 
 
 namespace grab {
@@ -204,7 +204,7 @@ static inline void abs_path(char *dst, size_t dstlen, const char *dir, const cha
 }
 
 
-static int nftw_once(const char *dir, int (*fn) (int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed)
+static int nftw_once(const char *dir, int (*fn) (int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), bool recursed, int flags, unsigned int depth)
 {
 	DIR *dp = nullptr;
 	struct dirent *de = nullptr;
@@ -268,12 +268,19 @@ static int nftw_once(const char *dir, int (*fn) (int dfd, const char *dirname, c
 
 		// don't follow symlinks into directories
 		if (S_ISDIR(lst.st_mode)) {
+
+			if (flags & G_FTW_NAME_ONLY)
+				fn(dp->fd.load(), dp->dirname, de->d_name, &lst, G_FTW_F, nullptr);
+
 			char fullp[4096];
 
-			// double slashes in pathnames do not matter (in case initial dir had prepended /)
-			abs_path(fullp, sizeof(fullp), dp->dirname, de->d_name);
-			nftw_once(fullp, fn, 1);
-		} else if (S_ISREG(lst.st_mode)) {
+			if (depth < max_recursion_depth) {
+				// double slashes in pathnames do not matter (in case initial dir had prepended /)
+				abs_path(fullp, sizeof(fullp), dp->dirname, de->d_name);
+				nftw_once(fullp, fn, 1, flags, depth + 1);
+			}
+		} else if (S_ISREG(lst.st_mode) || (flags & G_FTW_NAME_ONLY)) {
+			// in G_FTW_NAME_ONLY case min_file_size == 0, so no need to double-check
 			if (!min_file_size || lst.st_size >= min_file_size)
 				fn(dp->fd.load(), dp->dirname, de->d_name, &lst, G_FTW_F, nullptr);
 		}
@@ -290,7 +297,7 @@ static int nftw_once(const char *dir, int (*fn) (int dfd, const char *dirname, c
 // Parallel + racursive nftw() version for multicore. nopenfd is ignored
 int nftw_multi(const char *dir, int (*fn)(int dfd, const char *dirname, const char *basename, const struct stat *sb, int typeflag, void *ftwbuf), int nopenfd, int flags)
 {
-	return nftw_once(dir, fn, 0);
+	return nftw_once(dir, fn, 0, flags, 0);
 }
 
 

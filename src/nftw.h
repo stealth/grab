@@ -49,7 +49,8 @@ namespace grab {
 
 enum {
 	G_FTW_PHYS	= 1,
-	G_FTW_F		= 0x1000
+	G_FTW_F		= 2,
+	G_FTW_NAME_ONLY	= 4,
 };
 
 

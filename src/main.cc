@@ -55,7 +55,7 @@ using namespace grab;
 
 FileGrep *grep = nullptr;
 
-uint32_t min_file_size = 0;
+uint32_t min_file_size = 0, max_recursion_depth = 0xffffffff;
 
 #ifdef __APPLE__
 __thread FileGrep *tgrep = nullptr;
@@ -80,7 +80,7 @@ public:
 
 int thread_grep_once(int dfd, const char *dirname, const char *basename, const struct stat *st, int typeflag, void *ftwbuf)
 {
-	// since we use our own dedicated nftw() impl, only typeglag == FTW_F
+	// since we use our own dedicated nftw() impl, only typeflag == FTW_F
 	// and S_ISREG() files will reach us, so we do not need to check again
 	return tgrep->find(dfd, dirname, basename, st, G_FTW_F);
 }
