@@ -34,8 +34,8 @@
 #ifndef engine_hs_h
 #define engine_hs_h
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <string>
 #include <map>
 #include <hs.h>
 #include "engine.h"

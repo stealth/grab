@@ -37,7 +37,7 @@
 #include <map>
 #include <thread>
 #include <cstdio>
-#include <stdint.h>
+#include <cstdint>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>

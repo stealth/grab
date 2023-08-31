@@ -31,6 +31,7 @@
  */
 
 #include <string>
+#include <cstdint>
 #include <list>
 #include <map>
 #include <hs.h>

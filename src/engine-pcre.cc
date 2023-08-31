@@ -32,6 +32,7 @@
 
 
 #include <string>
+#include <cstdint>
 #include <map>
 #include <pcre.h>
 #include "engine-pcre.h"

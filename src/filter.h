@@ -33,6 +33,7 @@
 #ifndef spot_filter_h
 #define spot_filter_h
 
+#include <cstdint>
 #include <string>
 #include <sys/types.h>
 #include <sys/stat.h>

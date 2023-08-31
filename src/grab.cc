@@ -33,7 +33,7 @@
 #include <string>
 #include <map>
 #include <cstdio>
-#include <stdint.h>
+#include <cstdint>
 #include <iostream>
 #include <unistd.h>
 #include <fcntl.h>

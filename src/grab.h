@@ -33,7 +33,7 @@
 #ifndef grab_h
 #define grab_h
 
-#include <stdint.h>
+#include <cstdint>
 #include <string>
 #include <sstream>
 #include "engine.h"

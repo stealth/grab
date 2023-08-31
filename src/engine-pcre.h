@@ -34,8 +34,8 @@
 #ifndef engine_pcre_h
 #define engine_pcre_h
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <string>
 #include <map>
 #include <pcre.h>
 #include "engine.h"

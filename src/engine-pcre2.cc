@@ -31,6 +31,7 @@
  */
 
 #include <string>
+#include <cstdint>
 #include <map>
 #include <pcre2.h>
 #include "engine-pcre2.h"

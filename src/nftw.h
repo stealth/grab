@@ -33,7 +33,7 @@
 #ifndef nftw_h
 #define nftw_h
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 #include <atomic>
 #include <vector>

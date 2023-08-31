@@ -33,8 +33,8 @@
 #ifndef engine_h
 #define engine_h
 
-#include <stdint.h>
-#include <string.h>
+#include <cstdint>
+#include <string>
 #include <map>
 
 
